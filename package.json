@@ -2,7 +2,7 @@
   "name": "codex-commit-widget",
   "displayName": "Codex Commit Widget",
   "description": "Generate git commit messages in VS Code using Codex.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "your-name",
   "engines": {
     "vscode": "^1.95.0"
@@ -19,12 +19,46 @@
     "commands": [
       {
         "command": "codexCommitWidget.generateCommitMessage",
-        "title": "Codex: Generate Commit Message"
+        "title": "Codex: Generate Commit Message",
+        "icon": {
+          "light": "media/commit-light.svg",
+          "dark": "media/commit-dark.svg"
+        }
       }
     ],
+    "menus": {
+      "scm/inputBox": [
+        {
+          "command": "codexCommitWidget.generateCommitMessage",
+          "when": "scmProvider == git",
+          "group": "navigation"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "codexCommitWidget.generateCommitMessage",
+          "when": "scmProvider == git",
+          "group": "navigation@20"
+        }
+      ]
+    },
     "configuration": {
       "title": "Codex Commit Widget",
       "properties": {
+        "codexCommitWidget.provider": {
+          "type": "string",
+          "enum": [
+            "cli",
+            "extensionThenCli"
+          ],
+          "default": "cli",
+          "description": "Message generation backend. Use extensionThenCli to try a configured extension command first, then fallback to CLI."
+        },
+        "codexCommitWidget.codexExtensionCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Optional VS Code command ID for a Codex-enabled extension integration. Used when provider is extensionThenCli."
+        },
         "codexCommitWidget.codexCommand": {
           "type": "string",
           "default": "codex",
@@ -42,8 +76,8 @@
         },
         "codexCommitWidget.promptTemplate": {
           "type": "string",
-          "default": "You are generating a git commit message. Return only the final commit message, no code fences, no explanations. Use conventional commits when appropriate. Prefer a single-line subject under 72 characters unless the change clearly needs a body. Summarize the staged changes accurately.",
-          "description": "Prompt prefix sent to Codex before the diff."
+          "default": "You are generating a git commit message from staged changes. Return only the final commit message, no code fences, no explanations. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts supported by the diff.",
+          "description": "Prompt prefix sent to Codex before status, file list, stats, and patch."
         }
       }
     }

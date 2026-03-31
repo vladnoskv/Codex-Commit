@@ -1,22 +1,53 @@
-Requirements
+# Codex Commit Widget
 
-You need:
+VS Code extension that adds a commit-message generator button in Source Control, similar to the inline Copilot-style action.
 
-the built-in Git extension enabled in VS Code
-the Codex CLI installed locally
-Codex already authenticated/configured
+## What it does
 
-codex exec is the documented non-interactive way to run Codex from scripts, which is why this approach is the safest fit for a VS Code extension button.
+- Adds a `$(sparkle)` action on the Source Control commit input box.
+- Reads staged Git changes only.
+- Sends Codex a structured context:
+  - `git status --short --branch`
+  - staged changed files (`git diff --cached --name-status`)
+  - staged diff stats (`git diff --cached --stat`)
+  - staged patch (`git diff --cached --minimal`)
+- Generates an audit-friendly commit message with:
+  - subject line
+  - Change Summary
+  - Files Changed
+  - Audit Trail
 
-Notes
-1. This is a custom replacement for the Copilot flow
+## Run locally
 
-VS Code’s documented commit-message generation UI is a Copilot feature, so this extension adds its own button/command rather than trying to hijack Copilot’s built-in sparkle action.
+1. Install dependencies:
+   - `npm install`
+2. Build:
+   - `npm run build`
+3. Launch Extension Development Host:
+   - press `F5` in this workspace
+4. In the new VS Code window:
+   - open a Git repo
+   - stage changes
+   - open Source Control view
+   - click the sparkle icon at the right side of the commit message input
 
-2. It uses the same Codex config surface
+## Settings
 
-Codex docs say the CLI and IDE extension share configuration layers, and the IDE extension uses Codex config from ~/.codex/config.toml / project .codex/config.toml.
+- `codexCommitWidget.provider`
+  - `cli` (default): uses Codex CLI.
+  - `extensionThenCli`: tries a configured VS Code command first, then falls back to CLI.
+- `codexCommitWidget.codexExtensionCommand`
+  - Optional command ID used when `provider = extensionThenCli`.
+- `codexCommitWidget.codexCommand`
+  - CLI executable name/path (default: `codex`).
+- `codexCommitWidget.model`
+  - Optional model passed as `--model`.
+- `codexCommitWidget.maxDiffChars`
+  - Max chars from staged context sent to Codex.
+- `codexCommitWidget.promptTemplate`
+  - Prompt prefix for output style and policy.
 
-3. If you want deeper integration
+## Requirements
 
-The Codex docs describe app-server as the interface used to power rich clients such as the VS Code extension, and it is intended for deep integrations. That is the next step if you want streaming output, approvals, richer UX, or a side-panel flow instead of a simple widget.
+- Built-in Git extension enabled in VS Code.
+- Codex CLI installed and authenticated when using `provider = cli` or CLI fallback.

@@ -8,10 +8,7 @@ type ScmInputBoxLike = {
   value: string;
 };
 
-type SourceControlLike = {
-  inputBox?: ScmInputBoxLike;
-  rootUri?: vscode.Uri;
-};
+type GenerationProvider = "cli" | "extensionThenCli";
 
 export function activate(context: vscode.ExtensionContext) {
   const statusBar = vscode.window.createStatusBarItem(
@@ -69,12 +66,16 @@ async function generateCommitMessage(): Promise<void> {
   }
 
   const config = vscode.workspace.getConfiguration("codexCommitWidget");
+  const provider = config.get<GenerationProvider>("provider", "cli");
+  const codexExtensionCommand = config
+    .get<string>("codexExtensionCommand", "")
+    .trim();
   const codexCommand = config.get<string>("codexCommand", "codex");
   const model = config.get<string>("model", "").trim();
   const maxDiffChars = config.get<number>("maxDiffChars", 120000);
   const promptTemplate = config.get<string>(
     "promptTemplate",
-    "You are generating a git commit message. Return only the final commit message, no code fences, no explanations. Use conventional commits when appropriate. Prefer a single-line subject under 72 characters unless the change clearly needs a body. Summarize the staged changes accurately."
+    "You are generating a git commit message from staged changes. Return only the final commit message, no code fences, no explanations. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts supported by the diff."
   );
 
   try {
@@ -85,7 +86,7 @@ async function generateCommitMessage(): Promise<void> {
         cancellable: false
       },
       async () => {
-        const stagedSummary = await getStagedDiff(repo.rootUri.fsPath);
+        const stagedSummary = await getStagedContext(repo.rootUri.fsPath);
 
         if (!stagedSummary.trim()) {
           throw new Error("No staged changes found. Stage your files first.");
@@ -113,23 +114,16 @@ async function generateCommitMessage(): Promise<void> {
         }
         args.push(prompt);
 
-        let stdout: string;
-        let stderr: string;
-
-        try {
-          ({ stdout, stderr } = await execFileAsync(codexCommand, args, {
-            cwd: repo.rootUri.fsPath,
-            maxBuffer: 10 * 1024 * 1024,
-            env: process.env
-          }));
-        } catch (error: any) {
-          const details = error?.stderr || error?.message || "Unknown Codex error.";
-          throw new Error(
-            `Failed to run Codex CLI. Make sure \`${codexCommand}\` is installed and working.\n\n${details}`
-          );
-        }
-
-        const raw = (stdout || stderr || "").trim();
+        const raw = (
+          await generateRawCommitMessage({
+            provider,
+            codexExtensionCommand,
+            codexCommand,
+            args,
+            prompt,
+            cwd: repo.rootUri.fsPath
+          })
+        ).trim();
         const message = normalizeCommitMessage(raw);
 
         if (!message) {
@@ -146,6 +140,158 @@ async function generateCommitMessage(): Promise<void> {
       err instanceof Error ? err.message : "Unknown error while generating commit message.";
     void vscode.window.showErrorMessage(message);
   }
+}
+
+async function generateRawCommitMessage(options: {
+  provider: GenerationProvider;
+  codexExtensionCommand: string;
+  codexCommand: string;
+  args: string[];
+  prompt: string;
+  cwd: string;
+}): Promise<string> {
+  const {
+    provider,
+    codexExtensionCommand,
+    codexCommand,
+    args,
+    prompt,
+    cwd
+  } = options;
+
+  if (provider === "extensionThenCli") {
+    if (codexExtensionCommand) {
+      const extensionRaw = await tryGenerateViaExtensionCommand(
+        codexExtensionCommand,
+        prompt,
+        cwd
+      );
+
+      if (extensionRaw.trim()) {
+        return extensionRaw;
+      }
+    }
+  }
+
+  const { stdout, stderr } = await runCodexCli(codexCommand, args, cwd);
+  return stdout || stderr || "";
+}
+
+async function tryGenerateViaExtensionCommand(
+  commandId: string,
+  prompt: string,
+  cwd: string
+): Promise<string> {
+  try {
+    const result = await vscode.commands.executeCommand(commandId, {
+      prompt,
+      cwd,
+      source: "codex-commit-widget"
+    });
+    return extractTextFromUnknownResult(result);
+  } catch {
+    try {
+      const fallbackResult = await vscode.commands.executeCommand(commandId, prompt);
+      return extractTextFromUnknownResult(fallbackResult);
+    } catch {
+      return "";
+    }
+  }
+}
+
+async function runCodexCli(codexCommand: string, args: string[], cwd: string) {
+  const candidates = getCodexCliCandidates(codexCommand);
+  let lastEnoentError: unknown;
+
+  for (const candidate of candidates) {
+    try {
+      return await execFileAsync(candidate, args, {
+        cwd,
+        maxBuffer: 10 * 1024 * 1024,
+        env: process.env
+      });
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        lastEnoentError = error;
+        continue;
+      }
+
+      const details = error?.stderr || error?.message || "Unknown Codex error.";
+      throw new Error(`Codex CLI failed using \`${candidate}\`.\n\n${details}`);
+    }
+  }
+
+  const attempted = candidates.map((candidate) => `\`${candidate}\``).join(", ");
+  const enoentMessage =
+    lastEnoentError && typeof lastEnoentError === "object"
+      ? (lastEnoentError as { message?: string }).message || ""
+      : "";
+
+  throw new Error(
+    "Failed to run Codex CLI (command not found).\n" +
+      `Tried: ${attempted}\n\n` +
+      "Fix one of these:\n" +
+      "1) Install Codex CLI and ensure VS Code can access it in PATH.\n" +
+      "2) Set `codexCommitWidget.codexCommand` to the full executable path (for Windows, commonly `%APPDATA%\\\\npm\\\\codex.cmd`).\n" +
+      "3) Use extension mode by setting `codexCommitWidget.provider` to `extensionThenCli` and configuring `codexCommitWidget.codexExtensionCommand`.\n\n" +
+      enoentMessage
+  );
+}
+
+function getCodexCliCandidates(configuredCommand: string): string[] {
+  const base = configuredCommand.trim() || "codex";
+  const candidates: string[] = [base];
+
+  if (process.platform === "win32") {
+    candidates.push("codex.cmd");
+
+    const appData = process.env.APPDATA;
+    if (appData) {
+      candidates.push(`${appData}\\npm\\codex.cmd`);
+    }
+
+    const userProfile = process.env.USERPROFILE;
+    if (userProfile) {
+      candidates.push(`${userProfile}\\AppData\\Roaming\\npm\\codex.cmd`);
+      candidates.push(`${userProfile}\\.npm-global\\bin\\codex.cmd`);
+      candidates.push(`${userProfile}\\scoop\\shims\\codex.cmd`);
+    }
+  }
+
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+function extractTextFromUnknownResult(result: unknown): string {
+  if (typeof result === "string") {
+    return result;
+  }
+
+  if (Array.isArray(result)) {
+    return result
+      .map((item) => extractTextFromUnknownResult(item))
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (result && typeof result === "object") {
+    const record = result as Record<string, unknown>;
+    const direct = [
+      record.message,
+      record.text,
+      record.content,
+      record.output,
+      record.response
+    ];
+
+    for (const value of direct) {
+      const text = extractTextFromUnknownResult(value);
+      if (text) {
+        return text;
+      }
+    }
+  }
+
+  return "";
 }
 
 async function pickRepository(
@@ -169,9 +315,19 @@ async function pickRepository(
   return selected?.repo;
 }
 
-async function getStagedDiff(cwd: string): Promise<string> {
+async function getStagedContext(cwd: string): Promise<string> {
+  const status = await execGit(
+    ["status", "--short", "--branch", "--no-renames"],
+    cwd
+  );
+
   const nameStatus = await execGit(
     ["diff", "--cached", "--name-status", "--no-ext-diff"],
+    cwd
+  );
+
+  const stat = await execGit(
+    ["diff", "--cached", "--stat", "--no-ext-diff"],
     cwd
   );
 
@@ -181,8 +337,14 @@ async function getStagedDiff(cwd: string): Promise<string> {
   );
 
   return [
+    "Repository status:",
+    status.stdout.trim() || "(none)",
+    "",
     "Changed files:",
     nameStatus.stdout.trim() || "(none)",
+    "",
+    "Diff stats:",
+    stat.stdout.trim() || "(none)",
     "",
     "Patch:",
     diff.stdout.trim() || "(none)"
