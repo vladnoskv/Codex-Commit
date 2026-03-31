@@ -1,60 +1,102 @@
 # Codex Commit Widget
 
-VS Code extension that adds a commit-message generator action in Source Control.
+![Codex Commit Widget logo](media/logo.png)
 
-## What it does
+Generate high-quality commit messages in VS Code from your staged Git changes using Codex.
 
-- Adds a `$(sparkle)` action in the Source Control title area.
-- Reads staged Git changes only.
-- Sends Codex a structured context:
-  - `git status --short --branch`
-  - staged changed files (`git diff --cached --name-status`)
-  - staged diff stats (`git diff --cached --stat`)
-  - staged patch (`git diff --cached --minimal`)
-- Generates an audit-friendly commit message with:
-  - subject line
-  - Change Summary
-  - Files Changed
-  - Audit Trail
+## Install
 
-## Run locally
+Install as a VS Code extension:
 
-1. Install dependencies:
-   - `npm install`
-2. Build:
-   - `npm run build`
-3. Launch Extension Development Host:
-   - press `F5` in this workspace
-4. In the new VS Code window:
-   - open a Git repo
-   - stage changes
-   - open Source Control view
-  - click the sparkle action in the Source Control title area
+- From Marketplace: search for **Codex Commit Widget**
+- Or from a `.vsix` build: `Extensions: Install from VSIX...`
+
+
+
+## Quick Start
+
+1. Open a Git repository in VS Code.
+2. Stage the files you want to commit.
+3. Open Source Control.
+4. Click the Codex action in the Source Control title bar.
+5. The generated message is written directly into the commit message box.
+
+## What It Uses
+
+The extension sends staged context (not unstaged changes):
+
+- Repository status
+- Changed file list
+- Diff stats
+- Staged patch
+
+## Authentication Requirement
+
+You must be logged into Codex to generate messages.
+
+If your session is missing/expired, the extension shows a fallback message and tells you to run:
+
+```bash
+codex auth login
+```
+
+Then run generation again.
 
 ## Settings
 
+Core:
+
 - `codexCommitWidget.provider`
-  - `cli` (default): uses Codex CLI.
-  - `extensionThenCli`: tries a configured VS Code command first, then falls back to CLI.
-- `codexCommitWidget.codexExtensionCommand`
-  - Optional command ID used when `provider = extensionThenCli`.
+  - `cli` (default) or `extensionThenCli`
 - `codexCommitWidget.codexCommand`
-  - CLI executable name/path (default: `codex`).
+  - Codex CLI path/name (default: `codex`)
+- `codexCommitWidget.codexExtensionCommand`
+  - Optional extension command ID for `extensionThenCli`
 - `codexCommitWidget.model`
-  - Default model passed as `--model` (default: `gpt-5.1-codex-mini`).
 - `codexCommitWidget.reasoningEffort`
-  - Reasoning effort passed via `-c model_reasoning_effort=...` (default: `low`).
 - `codexCommitWidget.maxDiffChars`
-  - Max chars from staged context sent to Codex.
+
+Prompt/style customization:
+
 - `codexCommitWidget.promptTemplate`
-  - Prompt prefix for output style and policy.
+- `codexCommitWidget.additionalPromptInstructions`
+- `codexCommitWidget.temperatureOverride`
+- `codexCommitWidget.topPOverride`
+- `codexCommitWidget.maxOutputTokensOverride`
 
-## Notes
+UI and usage:
 
-- Commit generation reads staged worktree context from Git and sends it to Codex.
-- The extension uses `codex exec --output-last-message` so the commit box is filled with the model's final response, not CLI progress logs.
+- `codexCommitWidget.statusBarText`
+- `codexCommitWidget.showTokenUsageInTooltip`
+  - Shows token usage totals for the last 24 hours when hovering the status bar icon.
 
-## Requirements
+Detailed examples: [`docs/configuration.md`](docs/configuration.md)
 
-- Built-in Git extension enabled in VS Code.
-- Codex CLI installed and authenticated when using `provider = cli` or CLI fallback.
+## Token Usage Hover
+
+When enabled, hovering the status bar icon shows:
+
+- Total tokens (last 24h)
+- Input tokens
+- Output tokens
+- Number of generations
+- Estimated-run count when exact usage metadata is unavailable
+
+## Troubleshooting
+
+- No repository detected: open a folder/workspace with a Git repo.
+- No staged changes: stage files before generating.
+- Codex command not found: set `codexCommitWidget.codexCommand` to the executable path.
+- Auth/session errors: run `codex auth login`.
+
+## For Contributors
+
+Local dev/build instructions are intended for extension maintainers, not end users:
+
+1. `npm install`
+2. `npm run build`
+3. Press `F5` to launch an Extension Development Host
+
+## License
+
+MIT

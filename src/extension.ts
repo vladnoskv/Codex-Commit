@@ -15,7 +15,49 @@ type ScmInputBoxLike = {
 type GenerationProvider = "cli" | "extensionThenCli";
 type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
+type GenerationSettings = {
+  provider: GenerationProvider;
+  codexExtensionCommand: string;
+  codexCommand: string;
+  model: string;
+  reasoningEffort: ReasoningEffort;
+  maxDiffChars: number;
+  promptTemplate: string;
+  additionalPromptInstructions: string;
+  temperatureOverride: number | null;
+  topPOverride: number | null;
+  maxOutputTokensOverride: number | null;
+  showTokenUsageInTooltip: boolean;
+};
+
+type GeneratedCommitResult = {
+  raw: string;
+  usage: TokenUsageMeasurement | null;
+};
+
+type TokenUsageMeasurement = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimated: boolean;
+};
+
+type TokenUsageEntry = {
+  timestampMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimated: boolean;
+};
+
+const COMMAND_ID = "codexCommitWidget.generateCommitMessage";
 const DEFAULT_MODEL = "gpt-5.1-codex-mini";
+const DEFAULT_PROMPT_TEMPLATE =
+  "You are generating a git commit message from staged changes. Return only the final commit message, no code fences, no explanations. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts supported by the diff.";
+const DEFAULT_STATUS_BAR_TEXT = "$(sparkle) Codex Commit";
+const BASE_TOOLTIP = "Generate a commit message from staged changes using Codex";
+const TOKEN_USAGE_STATE_KEY = "codexCommitWidget.tokenUsageHistory.v1";
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function activate(context: vscode.ExtensionContext) {
   const statusBar = vscode.window.createStatusBarItem(
@@ -23,26 +65,35 @@ export function activate(context: vscode.ExtensionContext) {
     100
   );
 
-  statusBar.text = "$(sparkle) Codex Commit";
-  statusBar.tooltip = "Generate a commit message from staged changes using Codex";
-  statusBar.command = "codexCommitWidget.generateCommitMessage";
+  statusBar.command = COMMAND_ID;
+  applyStatusBarText(statusBar);
+  void updateStatusBarTooltip(context, statusBar);
   statusBar.show();
 
-  const disposable = vscode.commands.registerCommand(
-    "codexCommitWidget.generateCommitMessage",
-    async () => {
-      await generateCommitMessage();
-    }
-  );
+  const commandDisposable = vscode.commands.registerCommand(COMMAND_ID, async () => {
+    await generateCommitMessage(context, statusBar);
+  });
 
-  context.subscriptions.push(statusBar, disposable);
+  const configChangeDisposable = vscode.workspace.onDidChangeConfiguration((event) => {
+    if (!event.affectsConfiguration("codexCommitWidget")) {
+      return;
+    }
+
+    applyStatusBarText(statusBar);
+    void updateStatusBarTooltip(context, statusBar);
+  });
+
+  context.subscriptions.push(statusBar, commandDisposable, configChangeDisposable);
 }
 
 export function deactivate() {
   // no-op
 }
 
-async function generateCommitMessage(): Promise<void> {
+async function generateCommitMessage(
+  context: vscode.ExtensionContext,
+  statusBar: vscode.StatusBarItem
+): Promise<void> {
   const gitExtension = vscode.extensions.getExtension("vscode.git");
   if (!gitExtension) {
     void vscode.window.showErrorMessage("Built-in Git extension is not available.");
@@ -72,21 +123,7 @@ async function generateCommitMessage(): Promise<void> {
     return;
   }
 
-  const config = vscode.workspace.getConfiguration("codexCommitWidget");
-  const provider = config.get<GenerationProvider>("provider", "cli");
-  const codexExtensionCommand = config
-    .get<string>("codexExtensionCommand", "")
-    .trim();
-  const codexCommand = config.get<string>("codexCommand", "codex");
-  const model = config.get<string>("model", DEFAULT_MODEL).trim();
-  const reasoningEffort = normalizeReasoningEffort(
-    config.get<string>("reasoningEffort", "low")
-  );
-  const maxDiffChars = config.get<number>("maxDiffChars", 120000);
-  const promptTemplate = config.get<string>(
-    "promptTemplate",
-    "You are generating a git commit message from staged changes. Return only the final commit message, no code fences, no explanations. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts supported by the diff."
-  );
+  const settings = readGenerationSettings();
 
   try {
     await vscode.window.withProgress(
@@ -103,46 +140,50 @@ async function generateCommitMessage(): Promise<void> {
         }
 
         const trimmedDiff =
-          stagedSummary.length > maxDiffChars
-            ? stagedSummary.slice(0, maxDiffChars) +
+          stagedSummary.length > settings.maxDiffChars
+            ? stagedSummary.slice(0, settings.maxDiffChars) +
               "\n\n[Diff truncated to fit token budget]"
             : stagedSummary;
 
-        const prompt = [
-          promptTemplate,
-          "",
-          "Repository path:",
+        const prompt = buildPrompt(
+          settings.promptTemplate,
+          settings.additionalPromptInstructions,
           repo.rootUri.fsPath,
-          "",
-          "Staged diff:",
           trimmedDiff
-        ].join("\n");
+        );
 
         const outputLastMessageFile = getOutputLastMessageTempPath();
-        const args = ["exec", "--output-last-message", outputLastMessageFile];
-        if (model) {
-          args.push("--model", model);
-        }
-        args.push("-c", `model_reasoning_effort=${reasoningEffort}`);
-        args.push("-");
+        const args = buildCodexExecArgs(settings, outputLastMessageFile);
 
-        const raw = await generateRawCommitMessage({
-          provider,
-          codexExtensionCommand,
-          codexCommand,
+        const generated = await generateRawCommitMessage({
+          provider: settings.provider,
+          codexExtensionCommand: settings.codexExtensionCommand,
+          codexCommand: settings.codexCommand,
           args,
           prompt,
           cwd: repo.rootUri.fsPath,
-          outputLastMessageFile
+          outputLastMessageFile,
+          trackTokenUsage: settings.showTokenUsageInTooltip
         });
-        const message = normalizeCommitMessage(raw);
+
+        const message = normalizeCommitMessage(generated.raw);
 
         if (!message) {
           throw new Error("Codex returned an empty commit message.");
         }
 
-        repo.inputBox.value = message;
+        if (generated.usage) {
+          await appendTokenUsageEntry(context, {
+            timestampMs: Date.now(),
+            inputTokens: generated.usage.inputTokens,
+            outputTokens: generated.usage.outputTokens,
+            totalTokens: generated.usage.totalTokens,
+            estimated: generated.usage.estimated
+          });
+          await updateStatusBarTooltip(context, statusBar);
+        }
 
+        repo.inputBox.value = message;
         void vscode.window.showInformationMessage("Commit message generated with Codex.");
       }
     );
@@ -153,6 +194,198 @@ async function generateCommitMessage(): Promise<void> {
   }
 }
 
+function applyStatusBarText(statusBar: vscode.StatusBarItem): void {
+  const config = vscode.workspace.getConfiguration("codexCommitWidget");
+  const configured = config.get<string>("statusBarText", DEFAULT_STATUS_BAR_TEXT).trim();
+  statusBar.text = configured || DEFAULT_STATUS_BAR_TEXT;
+}
+
+async function updateStatusBarTooltip(
+  context: vscode.ExtensionContext,
+  statusBar: vscode.StatusBarItem
+): Promise<void> {
+  const config = vscode.workspace.getConfiguration("codexCommitWidget");
+  const showTokenUsage = config.get<boolean>("showTokenUsageInTooltip", true);
+
+  if (!showTokenUsage) {
+    statusBar.tooltip = `${BASE_TOOLTIP}\n\nToken usage hover details are disabled in settings.`;
+    return;
+  }
+
+  const entries = getTokenUsageEntries(context);
+  const recent = pruneTokenUsageEntries(entries);
+
+  if (recent.length === 0) {
+    statusBar.tooltip = `${BASE_TOOLTIP}\n\nToken usage (last 24h): no tracked generations yet.`;
+    return;
+  }
+
+  const totals = recent.reduce(
+    (acc, entry) => {
+      acc.input += entry.inputTokens;
+      acc.output += entry.outputTokens;
+      acc.total += entry.totalTokens;
+      if (entry.estimated) {
+        acc.estimated += 1;
+      }
+      return acc;
+    },
+    { input: 0, output: 0, total: 0, estimated: 0 }
+  );
+
+  const estimatedLine =
+    totals.estimated > 0
+      ? `\nEstimated runs (fallback parsing): ${totals.estimated}/${recent.length}`
+      : "";
+
+  statusBar.tooltip =
+    `${BASE_TOOLTIP}\n\n` +
+    "Token usage (last 24h)\n" +
+    `Total: ${formatNumber(totals.total)}\n` +
+    `Input: ${formatNumber(totals.input)}\n` +
+    `Output: ${formatNumber(totals.output)}\n` +
+    `Generations: ${recent.length}` +
+    estimatedLine;
+
+  if (recent.length !== entries.length) {
+    await context.globalState.update(TOKEN_USAGE_STATE_KEY, recent);
+  }
+}
+
+function readGenerationSettings(): GenerationSettings {
+  const config = vscode.workspace.getConfiguration("codexCommitWidget");
+
+  return {
+    provider: config.get<GenerationProvider>("provider", "cli"),
+    codexExtensionCommand: config.get<string>("codexExtensionCommand", "").trim(),
+    codexCommand: config.get<string>("codexCommand", "codex"),
+    model: config.get<string>("model", DEFAULT_MODEL).trim(),
+    reasoningEffort: normalizeReasoningEffort(config.get<string>("reasoningEffort", "low")),
+    maxDiffChars: normalizePositiveInteger(config.get<number>("maxDiffChars", 120000), 120000),
+    promptTemplate: config.get<string>("promptTemplate", DEFAULT_PROMPT_TEMPLATE),
+    additionalPromptInstructions: config
+      .get<string>("additionalPromptInstructions", "")
+      .trim(),
+    temperatureOverride: normalizeNumberInRange(
+      config.get<number | null>("temperatureOverride", null),
+      0,
+      2
+    ),
+    topPOverride: normalizeNumberInRange(
+      config.get<number | null>("topPOverride", null),
+      0,
+      1
+    ),
+    maxOutputTokensOverride: normalizePositiveIntegerOrNull(
+      config.get<number | null>("maxOutputTokensOverride", null)
+    ),
+    showTokenUsageInTooltip: config.get<boolean>("showTokenUsageInTooltip", true)
+  };
+}
+
+function buildPrompt(
+  promptTemplate: string,
+  additionalPromptInstructions: string,
+  repositoryPath: string,
+  stagedDiffSummary: string
+): string {
+  const sections: string[] = [promptTemplate.trim()];
+
+  if (additionalPromptInstructions) {
+    sections.push("", "Additional instructions:", additionalPromptInstructions);
+  }
+
+  sections.push(
+    "",
+    "Repository path:",
+    repositoryPath,
+    "",
+    "Staged diff:",
+    stagedDiffSummary
+  );
+
+  return sections.join("\n");
+}
+
+function buildCodexExecArgs(settings: GenerationSettings, outputLastMessageFile: string): string[] {
+  const args = ["exec", "--output-last-message", outputLastMessageFile];
+
+  if (settings.model) {
+    args.push("--model", settings.model);
+  }
+
+  args.push("-c", `model_reasoning_effort=${settings.reasoningEffort}`);
+
+  if (settings.temperatureOverride !== null) {
+    args.push("-c", `model_temperature=${settings.temperatureOverride}`);
+  }
+  if (settings.topPOverride !== null) {
+    args.push("-c", `model_top_p=${settings.topPOverride}`);
+  }
+  if (settings.maxOutputTokensOverride !== null) {
+    args.push("-c", `model_max_output_tokens=${settings.maxOutputTokensOverride}`);
+  }
+
+  args.push("-");
+  return args;
+}
+
+function getTokenUsageEntries(context: vscode.ExtensionContext): TokenUsageEntry[] {
+  const raw = context.globalState.get<unknown>(TOKEN_USAGE_STATE_KEY, []);
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw
+    .map((item): TokenUsageEntry | null => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const record = item as Record<string, unknown>;
+      const timestampMs = asFiniteNumber(record.timestampMs);
+      const inputTokens = asFiniteNumber(record.inputTokens);
+      const outputTokens = asFiniteNumber(record.outputTokens);
+      const totalTokens = asFiniteNumber(record.totalTokens);
+      const estimated = typeof record.estimated === "boolean" ? record.estimated : false;
+
+      if (
+        timestampMs === null ||
+        inputTokens === null ||
+        outputTokens === null ||
+        totalTokens === null
+      ) {
+        return null;
+      }
+
+      return {
+        timestampMs,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        estimated
+      };
+    })
+    .filter((entry): entry is TokenUsageEntry => entry !== null);
+}
+
+async function appendTokenUsageEntry(
+  context: vscode.ExtensionContext,
+  entry: TokenUsageEntry
+): Promise<void> {
+  const entries = getTokenUsageEntries(context);
+  entries.push(entry);
+  await context.globalState.update(TOKEN_USAGE_STATE_KEY, pruneTokenUsageEntries(entries));
+}
+
+function pruneTokenUsageEntries(
+  entries: TokenUsageEntry[],
+  nowMs: number = Date.now()
+): TokenUsageEntry[] {
+  const cutoff = nowMs - DAY_MS;
+  return entries.filter((entry) => entry.timestampMs >= cutoff);
+}
+
 async function generateRawCommitMessage(options: {
   provider: GenerationProvider;
   codexExtensionCommand: string;
@@ -161,7 +394,8 @@ async function generateRawCommitMessage(options: {
   prompt: string;
   cwd: string;
   outputLastMessageFile: string;
-}): Promise<string> {
+  trackTokenUsage: boolean;
+}): Promise<GeneratedCommitResult> {
   const {
     provider,
     codexExtensionCommand,
@@ -169,27 +403,36 @@ async function generateRawCommitMessage(options: {
     args,
     prompt,
     cwd,
-    outputLastMessageFile
+    outputLastMessageFile,
+    trackTokenUsage
   } = options;
 
   try {
-    if (provider === "extensionThenCli") {
-      if (codexExtensionCommand) {
-        const extensionRaw = await tryGenerateViaExtensionCommand(
-          codexExtensionCommand,
-          prompt,
-          cwd
-        );
+    if (provider === "extensionThenCli" && codexExtensionCommand) {
+      const extensionRaw = await tryGenerateViaExtensionCommand(
+        codexExtensionCommand,
+        prompt,
+        cwd
+      );
 
-        if (extensionRaw.trim() && !isLikelyPromptEcho(extensionRaw, prompt)) {
-          return extensionRaw.trim();
-        }
+      if (extensionRaw.trim() && !isLikelyPromptEcho(extensionRaw, prompt)) {
+        return {
+          raw: extensionRaw.trim(),
+          usage: trackTokenUsage ? estimateTokenUsage(prompt, extensionRaw) : null
+        };
       }
     }
 
+    await ensureCodexAuthSession(codexCommand, cwd);
+
     const { stdout, stderr } = await runCodexCli(codexCommand, args, cwd, prompt);
     const outputLastMessage = await readOutputLastMessage(outputLastMessageFile);
-    return (outputLastMessage || stdout || stderr || "").trim();
+    const raw = (outputLastMessage || stdout || stderr || "").trim();
+
+    return {
+      raw,
+      usage: trackTokenUsage ? parseOrEstimateTokenUsage(stdout, stderr, prompt, raw) : null
+    };
   } finally {
     try {
       await unlink(outputLastMessageFile);
@@ -221,6 +464,50 @@ async function tryGenerateViaExtensionCommand(
   }
 }
 
+async function ensureCodexAuthSession(codexCommand: string, cwd: string): Promise<void> {
+  const candidates = getCodexCliCandidates(codexCommand);
+
+  for (const candidate of candidates) {
+    try {
+      const shell = shouldUseShellForCliCandidate(candidate);
+      const { stdout, stderr } = await execFileAsync(candidate, ["auth", "status"], {
+        cwd,
+        maxBuffer: 1024 * 1024,
+        env: process.env,
+        shell
+      });
+      const combined = `${stdout ?? ""}\n${stderr ?? ""}`;
+
+      if (isAuthenticationRequiredText(combined)) {
+        throw new Error(getAuthRequiredMessage(combined));
+      }
+      return;
+    } catch (error: any) {
+      if (error?.code === "ENOENT") {
+        continue;
+      }
+
+      const details = [
+        String(error?.stdout ?? ""),
+        String(error?.stderr ?? ""),
+        String(error?.message ?? "")
+      ]
+        .join("\n")
+        .trim();
+
+      if (isUnsupportedAuthStatusCommand(details)) {
+        return;
+      }
+
+      if (isAuthenticationRequiredText(details)) {
+        throw new Error(getAuthRequiredMessage(details));
+      }
+
+      return;
+    }
+  }
+}
+
 async function runCodexCli(
   codexCommand: string,
   args: string[],
@@ -246,6 +533,10 @@ async function runCodexCli(
       }
 
       const details = error?.stderr || error?.message || "Unknown Codex error.";
+      if (isAuthenticationRequiredText(details)) {
+        throw new Error(getAuthRequiredMessage(details));
+      }
+
       throw new Error(`Codex CLI failed using \`${candidate}\`.\n\n${details}`);
     }
   }
@@ -264,6 +555,53 @@ async function runCodexCli(
       "2) Set `codexCommitWidget.codexCommand` to the full executable path (for Windows, commonly `%APPDATA%\\\\npm\\\\codex.cmd`).\n" +
       "3) Use extension mode by setting `codexCommitWidget.provider` to `extensionThenCli` and configuring `codexCommitWidget.codexExtensionCommand`.\n\n" +
       enoentMessage
+  );
+}
+
+function isAuthenticationRequiredText(text: string): boolean {
+  const normalized = normalizeWhitespace(text);
+
+  return [
+    "not logged in",
+    "login required",
+    "authentication required",
+    "please login",
+    "please log in",
+    "run codex auth login",
+    "run `codex auth login`",
+    "unauthorized",
+    "401",
+    "forbidden",
+    "invalid api key",
+    "missing api key",
+    "no auth session"
+  ].some((token) => normalized.includes(token));
+}
+
+function isUnsupportedAuthStatusCommand(text: string): boolean {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized.includes("auth")) {
+    return false;
+  }
+
+  return (
+    normalized.includes("unknown") ||
+    normalized.includes("unrecognized") ||
+    normalized.includes("no such command") ||
+    normalized.includes("invalid subcommand")
+  );
+}
+
+function getAuthRequiredMessage(details: string): string {
+  const compactDetails = details.trim();
+  const suffix = compactDetails
+    ? `\n\nDetails:\n${compactDetails.split(/\r?\n/).slice(0, 4).join("\n")}`
+    : "";
+
+  return (
+    "You must be logged into a Codex auth session to use commit generation.\n" +
+    "Run `codex auth login` in a terminal, then try again." +
+    suffix
   );
 }
 
@@ -355,6 +693,94 @@ function extractTextFromUnknownResult(result: unknown): string {
   return "";
 }
 
+function parseOrEstimateTokenUsage(
+  stdout: string,
+  stderr: string,
+  prompt: string,
+  rawResponse: string
+): TokenUsageMeasurement {
+  const parsed = parseTokenUsageFromText(`${stdout}\n${stderr}`);
+  if (parsed) {
+    return parsed;
+  }
+
+  return estimateTokenUsage(prompt, rawResponse);
+}
+
+function parseTokenUsageFromText(text: string): TokenUsageMeasurement | null {
+  const input =
+    extractTokenCount(text, [
+      /"input_tokens"\s*:\s*(\d+)/i,
+      /\binput[_\s-]*tokens?\b[^0-9]{0,20}(\d[\d,]*)/i,
+      /\bprompt[_\s-]*tokens?\b[^0-9]{0,20}(\d[\d,]*)/i
+    ]) ?? 0;
+
+  const output =
+    extractTokenCount(text, [
+      /"output_tokens"\s*:\s*(\d+)/i,
+      /\boutput[_\s-]*tokens?\b[^0-9]{0,20}(\d[\d,]*)/i,
+      /\bcompletion[_\s-]*tokens?\b[^0-9]{0,20}(\d[\d,]*)/i
+    ]) ?? 0;
+
+  const parsedTotal =
+    extractTokenCount(text, [
+      /"total_tokens"\s*:\s*(\d+)/i,
+      /\btotal[_\s-]*tokens?\b[^0-9]{0,20}(\d[\d,]*)/i,
+      /\btokens? used\b[^0-9]{0,20}(\d[\d,]*)/i
+    ]) ?? null;
+
+  const total = parsedTotal ?? input + output;
+  if (total <= 0) {
+    return null;
+  }
+
+  const safeOutput = output > 0 ? output : Math.max(total - input, 0);
+  return {
+    inputTokens: input,
+    outputTokens: safeOutput,
+    totalTokens: total,
+    estimated: false
+  };
+}
+
+function estimateTokenUsage(prompt: string, output: string): TokenUsageMeasurement {
+  const inputTokens = roughTokenEstimate(prompt);
+  const outputTokens = roughTokenEstimate(output);
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    estimated: true
+  };
+}
+
+function roughTokenEstimate(text: string): number {
+  const normalized = text.trim();
+  if (!normalized) {
+    return 0;
+  }
+
+  // Conservative token estimate for plain text/code payloads.
+  return Math.ceil(normalized.length / 4);
+}
+
+function extractTokenCount(text: string, patterns: RegExp[]): number | null {
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (!match || !match[1]) {
+      continue;
+    }
+
+    const parsed = Number.parseInt(match[1].replace(/,/g, ""), 10);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 function getOutputLastMessageTempPath(): string {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   return join(tmpdir(), `codex-commit-widget-${suffix}.txt`);
@@ -386,6 +812,47 @@ function normalizeReasoningEffort(value: string): ReasoningEffort {
   return "low";
 }
 
+function normalizeNumberInRange(
+  value: number | null | undefined,
+  min: number,
+  max: number
+): number | null {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return null;
+  }
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  if (value < min || value > max) {
+    return null;
+  }
+  return value;
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
+function normalizePositiveIntegerOrNull(value: number | null | undefined): number | null {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return null;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return Math.floor(value);
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return value;
+}
+
 function isLikelyPromptEcho(result: string, prompt: string): boolean {
   const resultNorm = normalizeWhitespace(result);
   const promptNorm = normalizeWhitespace(prompt);
@@ -414,6 +881,10 @@ function isLikelyPromptEcho(result: string, prompt: string): boolean {
 
 function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
 }
 
 async function pickRepository(

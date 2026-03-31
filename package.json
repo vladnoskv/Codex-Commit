@@ -2,9 +2,10 @@
   "name": "codex-commit-widget",
   "displayName": "Codex Commit Widget",
   "description": "Generate git commit messages in VS Code using Codex.",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "license": "MIT",
   "publisher": "vladnoskv",
+  "icon": "media/logo.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/vladnoskv/Codex-Commit.git"
@@ -85,10 +86,54 @@
           "default": 120000,
           "description": "Maximum number of diff characters sent to Codex."
         },
+        "codexCommitWidget.statusBarText": {
+          "type": "string",
+          "default": "$(sparkle) Codex Commit",
+          "description": "Status bar label for the commit generator action."
+        },
         "codexCommitWidget.promptTemplate": {
           "type": "string",
           "default": "You are generating a git commit message from staged changes. Return only the final commit message, no code fences, no explanations. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts supported by the diff.",
           "description": "Prompt prefix sent to Codex before status, file list, stats, and patch."
+        },
+        "codexCommitWidget.additionalPromptInstructions": {
+          "type": "string",
+          "default": "",
+          "description": "Optional extra prompt instructions appended before repository/diff context."
+        },
+        "codexCommitWidget.temperatureOverride": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Optional override for sampling temperature (sent as model_temperature). Leave null to use Codex defaults."
+        },
+        "codexCommitWidget.topPOverride": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Optional override for top-p sampling (sent as model_top_p). Leave null to use Codex defaults."
+        },
+        "codexCommitWidget.maxOutputTokensOverride": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "minimum": 1,
+          "description": "Optional max output token override (sent as model_max_output_tokens). Leave null to use Codex defaults."
+        },
+        "codexCommitWidget.showTokenUsageInTooltip": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show token usage totals for the last 24 hours when hovering the status bar icon."
         }
       }
     }
