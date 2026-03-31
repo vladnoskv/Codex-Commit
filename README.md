@@ -1,10 +1,10 @@
 # Codex Commit Widget
 
-VS Code extension that adds a commit-message generator button in Source Control, similar to the inline Copilot-style action.
+VS Code extension that adds a commit-message generator action in Source Control.
 
 ## What it does
 
-- Adds a `$(sparkle)` action on the Source Control commit input box.
+- Adds a `$(sparkle)` action in the Source Control title area.
 - Reads staged Git changes only.
 - Sends Codex a structured context:
   - `git status --short --branch`
@@ -29,7 +29,7 @@ VS Code extension that adds a commit-message generator button in Source Control,
    - open a Git repo
    - stage changes
    - open Source Control view
-   - click the sparkle icon at the right side of the commit message input
+  - click the sparkle action in the Source Control title area
 
 ## Settings
 

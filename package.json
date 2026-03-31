@@ -2,7 +2,7 @@
   "name": "codex-commit-widget",
   "displayName": "Codex Commit Widget",
   "description": "Generate git commit messages in VS Code using Codex.",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "license": "MIT",
   "publisher": "vladnoskv",
   "repository": {
@@ -32,13 +32,6 @@
       }
     ],
     "menus": {
-      "scm/inputBox": [
-        {
-          "command": "codexCommitWidget.generateCommitMessage",
-          "when": "scmProvider == git",
-          "group": "navigation"
-        }
-      ],
       "scm/title": [
         {
           "command": "codexCommitWidget.generateCommitMessage",
