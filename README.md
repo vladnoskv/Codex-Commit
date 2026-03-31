@@ -2,7 +2,7 @@
 
 ![Codex Commit Widget logo](media/logo.png)
 
-Generate high-quality commit messages in VS Code from your staged Git changes using Codex.
+Generate structured, review-friendly commit messages in VS Code from staged Git changes using Codex.
 
 ## Install
 
@@ -10,8 +10,6 @@ Install as a VS Code extension:
 
 - From Marketplace: search for **Codex Commit Widget**
 - Or from a `.vsix` build: `Extensions: Install from VSIX...`
-
-
 
 ## Quick Start
 
@@ -25,10 +23,18 @@ Install as a VS Code extension:
 
 The extension sends staged context (not unstaged changes):
 
+- Repository name
 - Repository status
 - Changed file list
 - Diff stats
 - Staged patch
+
+## Data Handling
+
+- This extension does not collect telemetry.
+- It sends prompt context to your configured Codex backend only when you trigger generation.
+- Prompt context includes staged Git content and excludes unstaged changes.
+- Absolute local repository paths are not sent.
 
 ## Authentication Requirement
 
@@ -103,4 +109,3 @@ Local dev/build instructions are intended for extension maintainers, not end use
 ## License
 
 MIT
-

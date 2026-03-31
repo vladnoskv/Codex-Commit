@@ -3,3 +3,7 @@ src/**
 tsconfig.json
 .gitignore
 package-lock.json
+*.vsix
+.github/**
+dist/**/*.map
+media/logo.svg

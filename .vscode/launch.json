@@ -1,5 +1,5 @@
 {
-  "version": "0.2.0",
+  "version": "1.5.2",
   "configurations": [
     {
       "name": "Run Extension",
@@ -12,7 +12,8 @@
       "outFiles": [
         "${workspaceFolder}/dist/**/*.js"
       ],
-      "preLaunchTask": "npm: build"
+      "preLaunchTask": "npm: compile"
     }
   ]
 }
+

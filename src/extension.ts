@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import type { ExecFileOptions } from "node:child_process";
 import { readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -290,6 +290,7 @@ function buildPrompt(
   stagedDiffSummary: string
 ): string {
   const sections: string[] = [promptTemplate.trim()];
+  const repositoryName = normalizeRepositoryName(repositoryPath);
 
   if (additionalPromptInstructions) {
     sections.push("", "Additional instructions:", additionalPromptInstructions);
@@ -297,14 +298,25 @@ function buildPrompt(
 
   sections.push(
     "",
-    "Repository path:",
-    repositoryPath,
+    "Repository:",
+    repositoryName,
     "",
     "Staged diff:",
     stagedDiffSummary
   );
 
   return sections.join("\n");
+}
+
+function normalizeRepositoryName(repositoryPath: string): string {
+  const trimmed = repositoryPath.trim();
+  if (!trimmed) {
+    return "(unknown)";
+  }
+
+  const withoutTrailingSeparators = trimmed.replace(/[\\/]+$/g, "");
+  const name = basename(withoutTrailingSeparators);
+  return name || "(unknown)";
 }
 
 function buildCodexExecArgs(settings: GenerationSettings, outputLastMessageFile: string): string[] {
