@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
+import type { ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -112,7 +113,7 @@ async function generateCommitMessage(): Promise<void> {
         if (model) {
           args.push("--model", model);
         }
-        args.push(prompt);
+        args.push("-");
 
         const raw = (
           await generateRawCommitMessage({
@@ -173,7 +174,7 @@ async function generateRawCommitMessage(options: {
     }
   }
 
-  const { stdout, stderr } = await runCodexCli(codexCommand, args, cwd);
+  const { stdout, stderr } = await runCodexCli(codexCommand, args, cwd, prompt);
   return stdout || stderr || "";
 }
 
@@ -199,14 +200,19 @@ async function tryGenerateViaExtensionCommand(
   }
 }
 
-async function runCodexCli(codexCommand: string, args: string[], cwd: string) {
+async function runCodexCli(
+  codexCommand: string,
+  args: string[],
+  cwd: string,
+  stdinText: string
+) {
   const candidates = getCodexCliCandidates(codexCommand);
   let lastEnoentError: unknown;
 
   for (const candidate of candidates) {
     try {
       const shell = shouldUseShellForCliCandidate(candidate);
-      return await execFileAsync(candidate, args, {
+      return await execFileWithStdin(candidate, args, stdinText, {
         cwd,
         maxBuffer: 10 * 1024 * 1024,
         env: process.env,
@@ -238,6 +244,34 @@ async function runCodexCli(codexCommand: string, args: string[], cwd: string) {
       "3) Use extension mode by setting `codexCommitWidget.provider` to `extensionThenCli` and configuring `codexCommitWidget.codexExtensionCommand`.\n\n" +
       enoentMessage
   );
+}
+
+async function execFileWithStdin(
+  file: string,
+  args: string[],
+  stdinText: string,
+  options: ExecFileOptions
+): Promise<{ stdout: string; stderr: string }> {
+  return await new Promise((resolve, reject) => {
+    const child = execFile(file, args, options, (error, stdout, stderr) => {
+      if (error) {
+        const enhancedError = error as Error & { stdout?: string; stderr?: string };
+        enhancedError.stdout = String(stdout ?? "");
+        enhancedError.stderr = String(stderr ?? "");
+        reject(enhancedError);
+        return;
+      }
+
+      resolve({
+        stdout: String(stdout ?? ""),
+        stderr: String(stderr ?? "")
+      });
+    });
+
+    if (child.stdin) {
+      child.stdin.end(stdinText);
+    }
+  });
 }
 
 function shouldUseShellForCliCandidate(candidate: string): boolean {
