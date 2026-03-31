@@ -205,10 +205,12 @@ async function runCodexCli(codexCommand: string, args: string[], cwd: string) {
 
   for (const candidate of candidates) {
     try {
+      const shell = shouldUseShellForCliCandidate(candidate);
       return await execFileAsync(candidate, args, {
         cwd,
         maxBuffer: 10 * 1024 * 1024,
-        env: process.env
+        env: process.env,
+        shell
       });
     } catch (error: any) {
       if (error?.code === "ENOENT") {
@@ -236,6 +238,10 @@ async function runCodexCli(codexCommand: string, args: string[], cwd: string) {
       "3) Use extension mode by setting `codexCommitWidget.provider` to `extensionThenCli` and configuring `codexCommitWidget.codexExtensionCommand`.\n\n" +
       enoentMessage
   );
+}
+
+function shouldUseShellForCliCandidate(candidate: string): boolean {
+  return process.platform === "win32" && /\.(cmd|bat)$/i.test(candidate);
 }
 
 function getCodexCliCandidates(configuredCommand: string): string[] {

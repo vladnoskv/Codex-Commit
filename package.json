@@ -3,7 +3,12 @@
   "displayName": "Codex Commit Widget",
   "description": "Generate git commit messages in VS Code using Codex.",
   "version": "0.0.2",
-  "publisher": "your-name",
+  "license": "MIT",
+  "publisher": "vladnoskv",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vladnoskv/Codex-Commit.git"
+  },
   "engines": {
     "vscode": "^1.95.0"
   },
@@ -83,7 +88,8 @@
     }
   },
   "scripts": {
-    "build": "tsc -p .",
+    "build": "tsc -p . && npm run package:vsix",
+    "package:vsix": "npx @vscode/vsce package",
     "watch": "tsc -watch -p ."
   },
   "devDependencies": {
