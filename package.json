@@ -2,7 +2,7 @@
   "name": "codex-commit-widget",
   "displayName": "Codex Commit Widget",
   "description": "Generate git commit messages in VS Code using Codex.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "license": "MIT",
   "publisher": "vladnoskv",
   "repository": {
@@ -71,8 +71,21 @@
         },
         "codexCommitWidget.model": {
           "type": "string",
-          "default": "",
-          "description": "Optional Codex model to pass with --model. Leave empty to use your default."
+          "default": "gpt-5.1-codex-mini",
+          "description": "Default model passed as --model for commit message generation."
+        },
+        "codexCommitWidget.reasoningEffort": {
+          "type": "string",
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "default": "low",
+          "description": "Reasoning effort sent to Codex via -c model_reasoning_effort=<value>."
         },
         "codexCommitWidget.maxDiffChars": {
           "type": "number",

@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import type { ExecFileOptions } from "node:child_process";
+import { readFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -10,6 +13,9 @@ type ScmInputBoxLike = {
 };
 
 type GenerationProvider = "cli" | "extensionThenCli";
+type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+const DEFAULT_MODEL = "gpt-5.1-codex-mini";
 
 export function activate(context: vscode.ExtensionContext) {
   const statusBar = vscode.window.createStatusBarItem(
@@ -72,7 +78,10 @@ async function generateCommitMessage(): Promise<void> {
     .get<string>("codexExtensionCommand", "")
     .trim();
   const codexCommand = config.get<string>("codexCommand", "codex");
-  const model = config.get<string>("model", "").trim();
+  const model = config.get<string>("model", DEFAULT_MODEL).trim();
+  const reasoningEffort = normalizeReasoningEffort(
+    config.get<string>("reasoningEffort", "low")
+  );
   const maxDiffChars = config.get<number>("maxDiffChars", 120000);
   const promptTemplate = config.get<string>(
     "promptTemplate",
@@ -109,22 +118,23 @@ async function generateCommitMessage(): Promise<void> {
           trimmedDiff
         ].join("\n");
 
-        const args = ["exec"];
+        const outputLastMessageFile = getOutputLastMessageTempPath();
+        const args = ["exec", "--output-last-message", outputLastMessageFile];
         if (model) {
           args.push("--model", model);
         }
+        args.push("-c", `model_reasoning_effort=${reasoningEffort}`);
         args.push("-");
 
-        const raw = (
-          await generateRawCommitMessage({
-            provider,
-            codexExtensionCommand,
-            codexCommand,
-            args,
-            prompt,
-            cwd: repo.rootUri.fsPath
-          })
-        ).trim();
+        const raw = await generateRawCommitMessage({
+          provider,
+          codexExtensionCommand,
+          codexCommand,
+          args,
+          prompt,
+          cwd: repo.rootUri.fsPath,
+          outputLastMessageFile
+        });
         const message = normalizeCommitMessage(raw);
 
         if (!message) {
@@ -150,6 +160,7 @@ async function generateRawCommitMessage(options: {
   args: string[];
   prompt: string;
   cwd: string;
+  outputLastMessageFile: string;
 }): Promise<string> {
   const {
     provider,
@@ -157,25 +168,35 @@ async function generateRawCommitMessage(options: {
     codexCommand,
     args,
     prompt,
-    cwd
+    cwd,
+    outputLastMessageFile
   } = options;
 
-  if (provider === "extensionThenCli") {
-    if (codexExtensionCommand) {
-      const extensionRaw = await tryGenerateViaExtensionCommand(
-        codexExtensionCommand,
-        prompt,
-        cwd
-      );
+  try {
+    if (provider === "extensionThenCli") {
+      if (codexExtensionCommand) {
+        const extensionRaw = await tryGenerateViaExtensionCommand(
+          codexExtensionCommand,
+          prompt,
+          cwd
+        );
 
-      if (extensionRaw.trim()) {
-        return extensionRaw;
+        if (extensionRaw.trim() && !isLikelyPromptEcho(extensionRaw, prompt)) {
+          return extensionRaw.trim();
+        }
       }
     }
-  }
 
-  const { stdout, stderr } = await runCodexCli(codexCommand, args, cwd, prompt);
-  return stdout || stderr || "";
+    const { stdout, stderr } = await runCodexCli(codexCommand, args, cwd, prompt);
+    const outputLastMessage = await readOutputLastMessage(outputLastMessageFile);
+    return (outputLastMessage || stdout || stderr || "").trim();
+  } finally {
+    try {
+      await unlink(outputLastMessageFile);
+    } catch {
+      // no-op
+    }
+  }
 }
 
 async function tryGenerateViaExtensionCommand(
@@ -334,6 +355,67 @@ function extractTextFromUnknownResult(result: unknown): string {
   return "";
 }
 
+function getOutputLastMessageTempPath(): string {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return join(tmpdir(), `codex-commit-widget-${suffix}.txt`);
+}
+
+async function readOutputLastMessage(path: string): Promise<string> {
+  try {
+    return (await readFile(path, "utf8")).trim();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeReasoningEffort(value: string): ReasoningEffort {
+  const normalized = value.trim().toLowerCase();
+  const allowed: ReadonlySet<string> = new Set([
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh"
+  ]);
+
+  if (allowed.has(normalized)) {
+    return normalized as ReasoningEffort;
+  }
+
+  return "low";
+}
+
+function isLikelyPromptEcho(result: string, prompt: string): boolean {
+  const resultNorm = normalizeWhitespace(result);
+  const promptNorm = normalizeWhitespace(prompt);
+
+  if (!resultNorm || !promptNorm) {
+    return false;
+  }
+
+  if (resultNorm === promptNorm) {
+    return true;
+  }
+
+  if (
+    resultNorm.includes("you are generating a git commit message from staged changes") &&
+    resultNorm.includes("staged diff:")
+  ) {
+    return true;
+  }
+
+  if (resultNorm.length > 120 && promptNorm.includes(resultNorm)) {
+    return true;
+  }
+
+  return false;
+}
+
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 async function pickRepository(
   repositories: Array<{ rootUri: vscode.Uri; inputBox: ScmInputBoxLike }>
 ) {
@@ -411,20 +493,13 @@ function normalizeCommitMessage(raw: string): string {
   text = text.replace(/^Commit message:\s*/i, "");
   text = text.trim();
 
-  // If Codex returned multiple paragraphs with explanation, keep the likely commit block.
-  const sections = text
-    .split(/\n\s*\n/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  if (sections.length > 1) {
-    const likely = sections.find((section) => {
-      const firstLine = section.split("\n")[0]?.trim() ?? "";
-      return firstLine.length > 0 && firstLine.length <= 100;
-    });
-    if (likely) {
-      text = likely;
-    }
+  // Keep the full structured commit message while trimming any leading chatter.
+  const lines = text.split(/\r?\n/);
+  const conventionalSubjectIndex = lines.findIndex((line) =>
+    /^[a-z]+(?:\([^)]+\))?!?:\s+\S.+$/i.test(line.trim())
+  );
+  if (conventionalSubjectIndex > 0) {
+    text = lines.slice(conventionalSubjectIndex).join("\n").trim();
   }
 
   // Trim trailing quotes occasionally produced by CLIs/prompts.

@@ -41,11 +41,18 @@ VS Code extension that adds a commit-message generator button in Source Control,
 - `codexCommitWidget.codexCommand`
   - CLI executable name/path (default: `codex`).
 - `codexCommitWidget.model`
-  - Optional model passed as `--model`.
+  - Default model passed as `--model` (default: `gpt-5.1-codex-mini`).
+- `codexCommitWidget.reasoningEffort`
+  - Reasoning effort passed via `-c model_reasoning_effort=...` (default: `low`).
 - `codexCommitWidget.maxDiffChars`
   - Max chars from staged context sent to Codex.
 - `codexCommitWidget.promptTemplate`
   - Prompt prefix for output style and policy.
+
+## Notes
+
+- Commit generation reads staged worktree context from Git and sends it to Codex.
+- The extension uses `codex exec --output-last-message` so the commit box is filled with the model's final response, not CLI progress logs.
 
 ## Requirements
 
