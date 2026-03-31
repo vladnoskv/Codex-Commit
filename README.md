@@ -88,6 +88,9 @@ When enabled, hovering the status bar icon shows:
 - No staged changes: stage files before generating.
 - Codex command not found: set `codexCommitWidget.codexCommand` to the executable path.
 - Auth/session errors: run `codex auth login`.
+- Settings show "No settings found" or logs show `Cannot register 'codexCommitWidget.*'` / `scm/inputBox is a proposed menu identifier`:
+  - Remove older installed versions of this extension and keep only the latest one.
+  - In local debugging, launch with `--disable-extensions` (already configured in `.vscode/launch.json`).
 
 ## For Contributors
 
@@ -100,3 +103,4 @@ Local dev/build instructions are intended for extension maintainers, not end use
 ## License
 
 MIT
+
