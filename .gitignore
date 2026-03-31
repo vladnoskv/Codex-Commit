@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.vsix
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test artifacts
+.vscode-test/
+coverage/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

@@ -1,0 +1,60 @@
+{
+  "name": "codex-commit-widget",
+  "displayName": "Codex Commit Widget",
+  "description": "Generate git commit messages in VS Code using Codex.",
+  "version": "0.0.1",
+  "publisher": "your-name",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexCommitWidget.generateCommitMessage",
+        "title": "Codex: Generate Commit Message"
+      }
+    ],
+    "configuration": {
+      "title": "Codex Commit Widget",
+      "properties": {
+        "codexCommitWidget.codexCommand": {
+          "type": "string",
+          "default": "codex",
+          "description": "Path or command name for the Codex CLI."
+        },
+        "codexCommitWidget.model": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Codex model to pass with --model. Leave empty to use your default."
+        },
+        "codexCommitWidget.maxDiffChars": {
+          "type": "number",
+          "default": 120000,
+          "description": "Maximum number of diff characters sent to Codex."
+        },
+        "codexCommitWidget.promptTemplate": {
+          "type": "string",
+          "default": "You are generating a git commit message. Return only the final commit message, no code fences, no explanations. Use conventional commits when appropriate. Prefer a single-line subject under 72 characters unless the change clearly needs a body. Summarize the staged changes accurately.",
+          "description": "Prompt prefix sent to Codex before the diff."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -watch -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.6.3"
+  }
+}
