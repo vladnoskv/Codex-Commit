@@ -55,7 +55,7 @@ const SETUP_CODEX_COMMAND_ID = "codexCommitWidget.setupCodexCli";
 const OPEN_SETTINGS_COMMAND_ID = "codexCommitWidget.openSettings";
 const SIDEBAR_VIEW_ID = "codexCommitWidget.sidebar";
 const SIDEBAR_ENABLED_CONTEXT_KEY = "codexCommitWidget.sidebarEnabled";
-const DEFAULT_MODEL = "gpt-5.1-codex-mini";
+const DEFAULT_MODEL = "gpt-5.4-mini";
 const MIN_RECOMMENDED_CODEX_VERSION = "0.120.0";
 const DEFAULT_PROMPT_TEMPLATE =
   "You are generating a git commit message from staged changes. Return only the final commit message, no code fences, no explanations. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts supported by the diff.";

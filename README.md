@@ -8,7 +8,13 @@ No endorsement or association is implied.
 
 Generate structured, review-friendly commit messages in VS Code from staged Git changes using Codex.
 
-Current extension release: `v1.7.0`.
+Current extension release: `v1.7.1`.
+
+## Release Notes
+
+### v1.7.1
+
+- Changed the default `codexCommitWidget.model` to `gpt-5.4-mini` for ChatGPT-account compatibility.
 
 ## Install
 

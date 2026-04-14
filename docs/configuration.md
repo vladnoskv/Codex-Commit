@@ -2,7 +2,9 @@
 
 This document shows practical `settings.json` examples for Codex Commit Widget.
 
-Applies to extension release: `v1.7.0`.
+Applies to extension release: `v1.7.1`.
+
+Model update in `v1.7.1`: default `codexCommitWidget.model` is now `gpt-5.4-mini`.
 
 ## Visual Preview
 
@@ -21,7 +23,7 @@ Settings examples:
 {
   "codexCommitWidget.provider": "cli",
   "codexCommitWidget.codexCommand": "codex",
-  "codexCommitWidget.model": "gpt-5.1-codex-mini",
+  "codexCommitWidget.model": "gpt-5.4-mini",
   "codexCommitWidget.reasoningEffort": "low",
   "codexCommitWidget.enableSidebarAction": true
 }

@@ -2,7 +2,7 @@
   "name": "codex-commit-widget",
   "displayName": "Codex Commit Widget",
   "description": "Generate structured commit messages from staged Git changes in VS Code using Codex.",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "license": "MIT",
   "publisher": "VladNoskov",
   "icon": "media/logo.png",
@@ -98,7 +98,7 @@
         },
         "codexCommitWidget.model": {
           "type": "string",
-          "default": "gpt-5.1-codex-mini",
+          "default": "gpt-5.4-mini",
           "description": "Default model passed as --model for commit message generation."
         },
         "codexCommitWidget.reasoningEffort": {
