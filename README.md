@@ -1,4 +1,4 @@
-# Codex Commit Widget
+# Codex Commit Widget v1.7.1
 
 ![Codex Commit Widget logo](media/logo.png)
 
