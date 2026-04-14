@@ -7,3 +7,5 @@ package-lock.json
 .github/**
 dist/**/*.map
 media/logo.svg
+.env
+ADMIN_ONLY_PUSH.md
