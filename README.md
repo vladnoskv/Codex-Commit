@@ -2,6 +2,10 @@
 
 ![Codex Commit Widget logo](media/logo.png)
 
+**DISCLAIMER** Note: This is an independent project. It is not affiliated with OpenAI. 
+"Codex" is a trademarked name and is used here for naming purposes only. 
+No endorsement or association is implied.
+
 Generate structured, review-friendly commit messages in VS Code from staged Git changes using Codex.
 
 Current extension release: `v1.7.0`.
