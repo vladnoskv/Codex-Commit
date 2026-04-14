@@ -2,7 +2,7 @@
   "name": "codex-commit-widget",
   "displayName": "Codex Commit Widget",
   "description": "Generate structured commit messages from staged Git changes in VS Code using Codex.",
-  "version": "1.5.2",
+  "version": "1.7.0",
   "license": "MIT",
   "publisher": "VladNoskov",
   "icon": "media/logo.png",
@@ -37,8 +37,34 @@
           "light": "media/commit-light.svg",
           "dark": "media/commit-dark.svg"
         }
+      },
+      {
+        "command": "codexCommitWidget.setupCodexCli",
+        "title": "Codex: Setup Codex CLI"
+      },
+      {
+        "command": "codexCommitWidget.openSettings",
+        "title": "Codex: Open Commit Widget Settings"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codexCommitWidget",
+          "title": "Codex Commit",
+          "icon": "media/commit-light.svg"
+        }
+      ]
+    },
+    "views": {
+      "codexCommitWidget": [
+        {
+          "id": "codexCommitWidget.sidebar",
+          "name": "Actions",
+          "when": "codexCommitWidget.sidebarEnabled"
+        }
+      ]
+    },
     "menus": {
       "scm/title": [
         {
@@ -98,6 +124,11 @@
           "default": "$(sparkle) Codex Commit",
           "description": "Status bar label for the commit generator action."
         },
+        "codexCommitWidget.enableSidebarAction": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Codex Commit sidebar action in the Activity Bar."
+        },
         "codexCommitWidget.promptTemplate": {
           "type": "string",
           "default": "You are generating a git commit message from staged changes. Return only the final commit message, no code fences, no explanations. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts supported by the diff.",
@@ -137,10 +168,52 @@
           "minimum": 1,
           "description": "Optional max output token override (sent as model_max_output_tokens). Leave null to use Codex defaults."
         },
-        "codexCommitWidget.showTokenUsageInTooltip": {
+        "codexCommitWidget.trackTokenUsageAnalytics": {
           "type": "boolean",
           "default": true,
-          "description": "Show token usage totals for the last 24 hours when hovering the status bar icon."
+          "description": "Track token usage analytics for commit generations."
+        },
+        "codexCommitWidget.analyticsRetentionDays": {
+          "type": "number",
+          "default": 7,
+          "minimum": 1,
+          "maximum": 30,
+          "description": "Retention window for token analytics. Entries older than this are auto-cleared."
+        },
+        "codexCommitWidget.analyticsSummary": {
+          "type": "string",
+          "default": "No tracked generations yet.",
+          "description": "Auto-managed analytics summary for recent token usage."
+        },
+        "codexCommitWidget.analyticsTotalTokens": {
+          "type": "number",
+          "default": 0,
+          "description": "Auto-managed total tokens in the analytics retention window."
+        },
+        "codexCommitWidget.analyticsInputTokens": {
+          "type": "number",
+          "default": 0,
+          "description": "Auto-managed input tokens in the analytics retention window."
+        },
+        "codexCommitWidget.analyticsOutputTokens": {
+          "type": "number",
+          "default": 0,
+          "description": "Auto-managed output tokens in the analytics retention window."
+        },
+        "codexCommitWidget.analyticsGenerations": {
+          "type": "number",
+          "default": 0,
+          "description": "Auto-managed generation count in the analytics retention window."
+        },
+        "codexCommitWidget.analyticsEstimatedRuns": {
+          "type": "number",
+          "default": 0,
+          "description": "Auto-managed count of runs where usage was estimated."
+        },
+        "codexCommitWidget.analyticsLastUpdated": {
+          "type": "string",
+          "default": "never",
+          "description": "Auto-managed timestamp of the last analytics refresh (UTC ISO-8601)."
         }
       }
     }

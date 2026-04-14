@@ -27,7 +27,7 @@ type GenerationSettings = {
   temperatureOverride: number | null;
   topPOverride: number | null;
   maxOutputTokensOverride: number | null;
-  showTokenUsageInTooltip: boolean;
+  trackTokenUsageAnalytics: boolean;
 };
 
 type GeneratedCommitResult = {
@@ -51,28 +51,57 @@ type TokenUsageEntry = {
 };
 
 const COMMAND_ID = "codexCommitWidget.generateCommitMessage";
+const SETUP_CODEX_COMMAND_ID = "codexCommitWidget.setupCodexCli";
+const OPEN_SETTINGS_COMMAND_ID = "codexCommitWidget.openSettings";
+const SIDEBAR_VIEW_ID = "codexCommitWidget.sidebar";
+const SIDEBAR_ENABLED_CONTEXT_KEY = "codexCommitWidget.sidebarEnabled";
 const DEFAULT_MODEL = "gpt-5.1-codex-mini";
+const MIN_RECOMMENDED_CODEX_VERSION = "0.120.0";
 const DEFAULT_PROMPT_TEMPLATE =
   "You are generating a git commit message from staged changes. Return only the final commit message, no code fences, no explanations. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts supported by the diff.";
 const DEFAULT_STATUS_BAR_TEXT = "$(sparkle) Codex Commit";
 const BASE_TOOLTIP = "Generate a commit message from staged changes using Codex";
 const TOKEN_USAGE_STATE_KEY = "codexCommitWidget.tokenUsageHistory.v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_ANALYTICS_RETENTION_DAYS = 7;
+let hasShownOutdatedCodexVersionWarning = false;
+let hasCheckedCodexCliVersion = false;
 
 export function activate(context: vscode.ExtensionContext) {
   const statusBar = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
     100
   );
+  const sidebarProvider = new SidebarActionProvider();
 
   statusBar.command = COMMAND_ID;
   applyStatusBarText(statusBar);
   void updateStatusBarTooltip(context, statusBar);
+  void syncTokenUsageAnalyticsSettings(context);
+  void autoConfigureCodexCliIfDefault();
+  void updateSidebarVisibilityContext();
   statusBar.show();
+
+  const sidebarView = vscode.window.createTreeView(SIDEBAR_VIEW_ID, {
+    treeDataProvider: sidebarProvider,
+    showCollapseAll: false
+  });
 
   const commandDisposable = vscode.commands.registerCommand(COMMAND_ID, async () => {
     await generateCommitMessage(context, statusBar);
   });
+  const setupCommandDisposable = vscode.commands.registerCommand(
+    SETUP_CODEX_COMMAND_ID,
+    async () => {
+      await setupCodexCliCommand();
+    }
+  );
+  const openSettingsCommandDisposable = vscode.commands.registerCommand(
+    OPEN_SETTINGS_COMMAND_ID,
+    async () => {
+      await openCodexWidgetSettings();
+    }
+  );
 
   const configChangeDisposable = vscode.workspace.onDidChangeConfiguration((event) => {
     if (!event.affectsConfiguration("codexCommitWidget")) {
@@ -81,13 +110,107 @@ export function activate(context: vscode.ExtensionContext) {
 
     applyStatusBarText(statusBar);
     void updateStatusBarTooltip(context, statusBar);
+    void updateSidebarVisibilityContext();
   });
 
-  context.subscriptions.push(statusBar, commandDisposable, configChangeDisposable);
+  context.subscriptions.push(
+    statusBar,
+    sidebarView,
+    commandDisposable,
+    setupCommandDisposable,
+    openSettingsCommandDisposable,
+    configChangeDisposable
+  );
 }
 
 export function deactivate() {
   // no-op
+}
+
+class SidebarActionProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+  getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
+    return element;
+  }
+
+  getChildren(): vscode.ProviderResult<vscode.TreeItem[]> {
+    const generateItem = new vscode.TreeItem(
+      "Generate Commit Message",
+      vscode.TreeItemCollapsibleState.None
+    );
+    generateItem.command = {
+      command: COMMAND_ID,
+      title: "Generate Commit Message"
+    };
+    generateItem.iconPath = new vscode.ThemeIcon("sparkle");
+    generateItem.tooltip = BASE_TOOLTIP;
+
+    const setupItem = new vscode.TreeItem("Setup Codex CLI", vscode.TreeItemCollapsibleState.None);
+    setupItem.command = {
+      command: SETUP_CODEX_COMMAND_ID,
+      title: "Setup Codex CLI"
+    };
+    setupItem.iconPath = new vscode.ThemeIcon("tools");
+    setupItem.tooltip = "Detect Codex CLI path and save it to extension settings";
+
+    const settingsItem = new vscode.TreeItem("Open Settings", vscode.TreeItemCollapsibleState.None);
+    settingsItem.command = {
+      command: OPEN_SETTINGS_COMMAND_ID,
+      title: "Open Settings"
+    };
+    settingsItem.iconPath = new vscode.ThemeIcon("gear");
+    settingsItem.tooltip = "Open Codex Commit Widget settings";
+
+    return [generateItem, setupItem, settingsItem];
+  }
+}
+
+async function setupCodexCliCommand(): Promise<void> {
+  const config = vscode.workspace.getConfiguration("codexCommitWidget");
+  const configuredCommand = config.get<string>("codexCommand", "codex");
+
+  const discovered = await discoverCodexCliBinary(configuredCommand);
+  if (!discovered) {
+    const openSettingsAction = "Open Settings";
+    const selected = await vscode.window.showErrorMessage(
+      "Codex CLI could not be auto-detected. Install Codex globally (`npm install -g @openai/codex@latest`) or set `codexCommitWidget.codexCommand` manually.",
+      openSettingsAction
+    );
+    if (selected === openSettingsAction) {
+      await openCodexWidgetSettings();
+    }
+    return;
+  }
+
+  await config.update("codexCommand", discovered.command, vscode.ConfigurationTarget.Global);
+  void vscode.window.showInformationMessage(
+    `Configured Codex CLI: ${discovered.command}${discovered.version ? ` (${discovered.version})` : ""}`
+  );
+}
+
+async function openCodexWidgetSettings(): Promise<void> {
+  await vscode.commands.executeCommand(
+    "workbench.action.openSettings",
+    "codexCommitWidget.codexCommand"
+  );
+}
+
+async function autoConfigureCodexCliIfDefault(): Promise<void> {
+  const config = vscode.workspace.getConfiguration("codexCommitWidget");
+  const configured = config.get<string>("codexCommand", "codex").trim() || "codex";
+  if (!/^codex(?:\.cmd|\.bat|\.exe)?$/i.test(configured)) {
+    return;
+  }
+
+  const discovered = await discoverCodexCliBinary(configured);
+  if (!discovered) {
+    return;
+  }
+
+  if (areCommandsEquivalent(discovered.command, configured)) {
+    return;
+  }
+
+  await config.update("codexCommand", discovered.command, vscode.ConfigurationTarget.Global);
 }
 
 async function generateCommitMessage(
@@ -163,7 +286,7 @@ async function generateCommitMessage(
           prompt,
           cwd: repo.rootUri.fsPath,
           outputLastMessageFile,
-          trackTokenUsage: settings.showTokenUsageInTooltip
+          trackTokenUsage: settings.trackTokenUsageAnalytics
         });
 
         const message = normalizeCommitMessage(generated.raw);
@@ -180,6 +303,7 @@ async function generateCommitMessage(
             totalTokens: generated.usage.totalTokens,
             estimated: generated.usage.estimated
           });
+          await syncTokenUsageAnalyticsSettings(context);
           await updateStatusBarTooltip(context, statusBar);
         }
 
@@ -200,56 +324,27 @@ function applyStatusBarText(statusBar: vscode.StatusBarItem): void {
   statusBar.text = configured || DEFAULT_STATUS_BAR_TEXT;
 }
 
+function isSidebarActionEnabled(): boolean {
+  const config = vscode.workspace.getConfiguration("codexCommitWidget");
+  return config.get<boolean>("enableSidebarAction", true);
+}
+
+async function updateSidebarVisibilityContext(): Promise<void> {
+  await vscode.commands.executeCommand(
+    "setContext",
+    SIDEBAR_ENABLED_CONTEXT_KEY,
+    isSidebarActionEnabled()
+  );
+}
+
 async function updateStatusBarTooltip(
-  context: vscode.ExtensionContext,
+  _context: vscode.ExtensionContext,
   statusBar: vscode.StatusBarItem
 ): Promise<void> {
-  const config = vscode.workspace.getConfiguration("codexCommitWidget");
-  const showTokenUsage = config.get<boolean>("showTokenUsageInTooltip", true);
-
-  if (!showTokenUsage) {
-    statusBar.tooltip = `${BASE_TOOLTIP}\n\nToken usage hover details are disabled in settings.`;
-    return;
-  }
-
-  const entries = getTokenUsageEntries(context);
-  const recent = pruneTokenUsageEntries(entries);
-
-  if (recent.length === 0) {
-    statusBar.tooltip = `${BASE_TOOLTIP}\n\nToken usage (last 24h): no tracked generations yet.`;
-    return;
-  }
-
-  const totals = recent.reduce(
-    (acc, entry) => {
-      acc.input += entry.inputTokens;
-      acc.output += entry.outputTokens;
-      acc.total += entry.totalTokens;
-      if (entry.estimated) {
-        acc.estimated += 1;
-      }
-      return acc;
-    },
-    { input: 0, output: 0, total: 0, estimated: 0 }
-  );
-
-  const estimatedLine =
-    totals.estimated > 0
-      ? `\nEstimated runs (fallback parsing): ${totals.estimated}/${recent.length}`
-      : "";
-
   statusBar.tooltip =
     `${BASE_TOOLTIP}\n\n` +
-    "Token usage (last 24h)\n" +
-    `Total: ${formatNumber(totals.total)}\n` +
-    `Input: ${formatNumber(totals.input)}\n` +
-    `Output: ${formatNumber(totals.output)}\n` +
-    `Generations: ${recent.length}` +
-    estimatedLine;
-
-  if (recent.length !== entries.length) {
-    await context.globalState.update(TOKEN_USAGE_STATE_KEY, recent);
-  }
+    "Token analytics are tracked in settings under:\n" +
+    "Codex Commit Widget > Analytics";
 }
 
 function readGenerationSettings(): GenerationSettings {
@@ -279,7 +374,7 @@ function readGenerationSettings(): GenerationSettings {
     maxOutputTokensOverride: normalizePositiveIntegerOrNull(
       config.get<number | null>("maxOutputTokensOverride", null)
     ),
-    showTokenUsageInTooltip: config.get<boolean>("showTokenUsageInTooltip", true)
+    trackTokenUsageAnalytics: config.get<boolean>("trackTokenUsageAnalytics", true)
   };
 }
 
@@ -387,15 +482,90 @@ async function appendTokenUsageEntry(
 ): Promise<void> {
   const entries = getTokenUsageEntries(context);
   entries.push(entry);
-  await context.globalState.update(TOKEN_USAGE_STATE_KEY, pruneTokenUsageEntries(entries));
+  await context.globalState.update(
+    TOKEN_USAGE_STATE_KEY,
+    pruneTokenUsageEntries(entries, getAnalyticsRetentionDays())
+  );
 }
 
 function pruneTokenUsageEntries(
   entries: TokenUsageEntry[],
+  retentionDays: number,
   nowMs: number = Date.now()
 ): TokenUsageEntry[] {
-  const cutoff = nowMs - DAY_MS;
+  const cutoff = nowMs - retentionDays * DAY_MS;
   return entries.filter((entry) => entry.timestampMs >= cutoff);
+}
+
+function getAnalyticsRetentionDays(): number {
+  const config = vscode.workspace.getConfiguration("codexCommitWidget");
+  return normalizeIntegerInRange(
+    config.get<number>("analyticsRetentionDays", DEFAULT_ANALYTICS_RETENTION_DAYS),
+    1,
+    30,
+    DEFAULT_ANALYTICS_RETENTION_DAYS
+  );
+}
+
+async function syncTokenUsageAnalyticsSettings(
+  context: vscode.ExtensionContext
+): Promise<void> {
+  const config = vscode.workspace.getConfiguration("codexCommitWidget");
+  const retentionDays = getAnalyticsRetentionDays();
+  const entries = getTokenUsageEntries(context);
+  const recent = pruneTokenUsageEntries(entries, retentionDays);
+
+  if (recent.length !== entries.length) {
+    await context.globalState.update(TOKEN_USAGE_STATE_KEY, recent);
+  }
+
+  const totals = recent.reduce(
+    (acc, entry) => {
+      acc.input += entry.inputTokens;
+      acc.output += entry.outputTokens;
+      acc.total += entry.totalTokens;
+      if (entry.estimated) {
+        acc.estimated += 1;
+      }
+      return acc;
+    },
+    { input: 0, output: 0, total: 0, estimated: 0 }
+  );
+
+  const summary =
+    recent.length === 0
+      ? `No tracked generations in the last ${retentionDays} day(s).`
+      : `Last ${retentionDays} day(s): ${formatNumber(totals.total)} total tokens (${formatNumber(
+          totals.input
+        )} input, ${formatNumber(totals.output)} output) across ${recent.length} generation(s)${
+          totals.estimated > 0
+            ? `; estimated runs: ${totals.estimated}/${recent.length}`
+            : ""
+        }.`;
+
+  await updateAnalyticsSettingIfChanged(config, "analyticsSummary", summary);
+  await updateAnalyticsSettingIfChanged(config, "analyticsTotalTokens", totals.total);
+  await updateAnalyticsSettingIfChanged(config, "analyticsInputTokens", totals.input);
+  await updateAnalyticsSettingIfChanged(config, "analyticsOutputTokens", totals.output);
+  await updateAnalyticsSettingIfChanged(config, "analyticsGenerations", recent.length);
+  await updateAnalyticsSettingIfChanged(config, "analyticsEstimatedRuns", totals.estimated);
+  await updateAnalyticsSettingIfChanged(
+    config,
+    "analyticsLastUpdated",
+    new Date().toISOString()
+  );
+}
+
+async function updateAnalyticsSettingIfChanged(
+  config: vscode.WorkspaceConfiguration,
+  key: string,
+  value: string | number
+): Promise<void> {
+  const current = config.get<string | number>(key);
+  if (current === value) {
+    return;
+  }
+  await config.update(key, value, vscode.ConfigurationTarget.Global);
 }
 
 async function generateRawCommitMessage(options: {
@@ -435,7 +605,7 @@ async function generateRawCommitMessage(options: {
       }
     }
 
-    await ensureCodexAuthSession(codexCommand, cwd);
+    await warnIfCodexCliOutdated(codexCommand, cwd);
 
     const { stdout, stderr } = await runCodexCli(codexCommand, args, cwd, prompt);
     const outputLastMessage = await readOutputLastMessage(outputLastMessageFile);
@@ -476,48 +646,98 @@ async function tryGenerateViaExtensionCommand(
   }
 }
 
-async function ensureCodexAuthSession(codexCommand: string, cwd: string): Promise<void> {
+async function warnIfCodexCliOutdated(codexCommand: string, cwd: string): Promise<void> {
+  if (hasShownOutdatedCodexVersionWarning || hasCheckedCodexCliVersion) {
+    return;
+  }
+  hasCheckedCodexCliVersion = true;
+
+  const parsedVersion = await getCodexCliVersion(codexCommand, cwd);
+  if (!parsedVersion) {
+    return;
+  }
+
+  const minVersion = parseSemver(MIN_RECOMMENDED_CODEX_VERSION);
+  if (!minVersion) {
+    return;
+  }
+
+  if (compareSemver(parsedVersion, minVersion) >= 0) {
+    return;
+  }
+
+  hasShownOutdatedCodexVersionWarning = true;
+  const current = `${parsedVersion[0]}.${parsedVersion[1]}.${parsedVersion[2]}`;
+  void vscode.window.showWarningMessage(
+    `Codex CLI ${current} detected. This extension is tuned for Codex CLI ${MIN_RECOMMENDED_CODEX_VERSION}+; upgrade to the latest version for best compatibility.`
+  );
+}
+
+async function getCodexCliVersion(
+  codexCommand: string,
+  cwd: string
+): Promise<[number, number, number] | null> {
   const candidates = getCodexCliCandidates(codexCommand);
 
   for (const candidate of candidates) {
     try {
       const shell = shouldUseShellForCliCandidate(candidate);
-      const { stdout, stderr } = await execFileAsync(candidate, ["auth", "status"], {
+      const { stdout, stderr } = await execFileAsync(candidate, ["--version"], {
         cwd,
         maxBuffer: 1024 * 1024,
         env: process.env,
         shell
       });
-      const combined = `${stdout ?? ""}\n${stderr ?? ""}`;
-
-      if (isAuthenticationRequiredText(combined)) {
-        throw new Error(getAuthRequiredMessage(combined));
+      const parsed = parseSemver(`${stdout ?? ""}\n${stderr ?? ""}`);
+      if (parsed) {
+        return parsed;
       }
-      return;
     } catch (error: any) {
       if (error?.code === "ENOENT") {
         continue;
       }
-
-      const details = [
-        String(error?.stdout ?? ""),
-        String(error?.stderr ?? ""),
-        String(error?.message ?? "")
-      ]
-        .join("\n")
-        .trim();
-
-      if (isUnsupportedAuthStatusCommand(details)) {
-        return;
+      const details = `${String(error?.stdout ?? "")}\n${String(error?.stderr ?? "")}\n${String(
+        error?.message ?? ""
+      )}`;
+      const parsed = parseSemver(details);
+      if (parsed) {
+        return parsed;
       }
-
-      if (isAuthenticationRequiredText(details)) {
-        throw new Error(getAuthRequiredMessage(details));
-      }
-
-      return;
     }
   }
+
+  return null;
+}
+
+function parseSemver(text: string): [number, number, number] | null {
+  const match = text.match(/(?:codex(?:-cli)?\s+)?(\d+)\.(\d+)\.(\d+)/i);
+  if (!match) {
+    return null;
+  }
+
+  const major = Number.parseInt(match[1], 10);
+  const minor = Number.parseInt(match[2], 10);
+  const patch = Number.parseInt(match[3], 10);
+  if (![major, minor, patch].every((part) => Number.isFinite(part))) {
+    return null;
+  }
+
+  return [major, minor, patch];
+}
+
+function compareSemver(
+  left: [number, number, number],
+  right: [number, number, number]
+): number {
+  for (let i = 0; i < 3; i += 1) {
+    if (left[i] > right[i]) {
+      return 1;
+    }
+    if (left[i] < right[i]) {
+      return -1;
+    }
+  }
+  return 0;
 }
 
 async function runCodexCli(
@@ -528,6 +748,7 @@ async function runCodexCli(
 ) {
   const candidates = getCodexCliCandidates(codexCommand);
   let lastEnoentError: unknown;
+  const authFailures: Array<{ candidate: string; details: string }> = [];
 
   for (const candidate of candidates) {
     try {
@@ -539,14 +760,29 @@ async function runCodexCli(
         shell
       });
     } catch (error: any) {
-      if (error?.code === "ENOENT") {
+      const stdout = String(error?.stdout ?? "");
+      const stderr = String(error?.stderr ?? "");
+      const message = String(error?.message ?? "");
+      const combined = [stdout, stderr, message].filter(Boolean).join("\n").trim();
+      const details = combined || "Unknown Codex error.";
+
+      if (isMissingCommandOrPathError(error, details)) {
         lastEnoentError = error;
         continue;
       }
 
-      const details = error?.stderr || error?.message || "Unknown Codex error.";
       if (isAuthenticationRequiredText(details)) {
-        throw new Error(getAuthRequiredMessage(details));
+        authFailures.push({ candidate, details });
+        continue;
+      }
+
+      if (isNoLastAgentMessageText(details)) {
+        // Some Codex CLI builds can exit non-zero for --output-last-message while still
+        // returning the useful response in stdout.
+        if (stdout.trim()) {
+          return { stdout, stderr };
+        }
+        throw new Error(getNoLastAgentMessageError(details));
       }
 
       throw new Error(`Codex CLI failed using \`${candidate}\`.\n\n${details}`);
@@ -558,6 +794,9 @@ async function runCodexCli(
     lastEnoentError && typeof lastEnoentError === "object"
       ? (lastEnoentError as { message?: string }).message || ""
       : "";
+  if (authFailures.length > 0) {
+    throw new Error(getAuthRequiredMessage(authFailures));
+  }
 
   throw new Error(
     "Failed to run Codex CLI (command not found).\n" +
@@ -565,8 +804,23 @@ async function runCodexCli(
       "Fix one of these:\n" +
       "1) Install Codex CLI and ensure VS Code can access it in PATH.\n" +
       "2) Set `codexCommitWidget.codexCommand` to the full executable path (for Windows, commonly `%APPDATA%\\\\npm\\\\codex.cmd`).\n" +
-      "3) Use extension mode by setting `codexCommitWidget.provider` to `extensionThenCli` and configuring `codexCommitWidget.codexExtensionCommand`.\n\n" +
+      "3) Run `Codex: Setup Codex CLI` from the Command Palette (or sidebar).\n" +
+      "4) Use extension mode by setting `codexCommitWidget.provider` to `extensionThenCli` and configuring `codexCommitWidget.codexExtensionCommand`.\n\n" +
       enoentMessage
+  );
+}
+
+function isMissingCommandOrPathError(error: unknown, details: string): boolean {
+  if (typeof error === "object" && error && (error as { code?: string }).code === "ENOENT") {
+    return true;
+  }
+
+  const normalized = normalizeWhitespace(details);
+  return (
+    normalized.includes("the system cannot find the path specified") ||
+    normalized.includes("cannot find the file") ||
+    normalized.includes("is not recognized as an internal or external command") ||
+    normalized.includes("no such file or directory")
   );
 }
 
@@ -574,9 +828,14 @@ function isAuthenticationRequiredText(text: string): boolean {
   const normalized = normalizeWhitespace(text);
 
   return [
+    "must be logged in",
     "not logged in",
+    "not authenticated",
+    "unauthenticated",
     "login required",
     "authentication required",
+    "run codex login",
+    "run `codex login`",
     "please login",
     "please log in",
     "run codex auth login",
@@ -590,29 +849,45 @@ function isAuthenticationRequiredText(text: string): boolean {
   ].some((token) => normalized.includes(token));
 }
 
-function isUnsupportedAuthStatusCommand(text: string): boolean {
+function isNoLastAgentMessageText(text: string): boolean {
   const normalized = normalizeWhitespace(text);
-  if (!normalized.includes("auth")) {
-    return false;
-  }
-
   return (
-    normalized.includes("unknown") ||
-    normalized.includes("unrecognized") ||
-    normalized.includes("no such command") ||
-    normalized.includes("invalid subcommand")
+    normalized.includes("no last agent message") ||
+    (normalized.includes("output-last-message") &&
+      normalized.includes("empty content"))
   );
 }
 
-function getAuthRequiredMessage(details: string): string {
-  const compactDetails = details.trim();
-  const suffix = compactDetails
-    ? `\n\nDetails:\n${compactDetails.split(/\r?\n/).slice(0, 4).join("\n")}`
-    : "";
+function getAuthRequiredMessage(
+  failures: Array<{ candidate: string; details: string }> | string
+): string {
+  const normalizedFailures =
+    typeof failures === "string"
+      ? [{ candidate: "(unknown)", details: failures }]
+      : failures;
+  const firstFailure = normalizedFailures[0]?.details.trim() ?? "";
+  const detailLines = firstFailure ? firstFailure.split(/\r?\n/).slice(0, 4) : [];
+  const candidates = normalizedFailures.map((failure) => `\`${failure.candidate}\``).join(", ");
+  const triedSuffix = candidates ? `\n\nTried CLI candidates: ${candidates}` : "";
+  const detailsSuffix = detailLines.length > 0 ? `\n\nDetails:\n${detailLines.join("\n")}` : "";
 
   return (
     "You must be logged into a Codex auth session to use commit generation.\n" +
-    "Run `codex auth login` in a terminal, then try again." +
+    "Run `codex login` in a terminal, then try again. If you have multiple Codex installs, set `codexCommitWidget.codexCommand` to the exact binary you logged into." +
+    triedSuffix +
+    detailsSuffix
+  );
+}
+
+function getNoLastAgentMessageError(details: string): string {
+  const compactDetails = details.trim();
+  const suffix = compactDetails
+    ? `\n\nDetails:\n${compactDetails.split(/\r?\n/).slice(0, 6).join("\n")}`
+    : "";
+
+  return (
+    "Codex CLI completed without a final assistant message, so no commit message could be extracted.\n" +
+    "If you're not logged in, run `codex login` (or `codex auth login` on older CLIs) and try again. If you're already logged in, retry once and ensure your Codex CLI is up to date." +
     suffix
   );
 }
@@ -650,26 +925,164 @@ function shouldUseShellForCliCandidate(candidate: string): boolean {
 }
 
 function getCodexCliCandidates(configuredCommand: string): string[] {
-  const base = configuredCommand.trim() || "codex";
-  const candidates: string[] = [base];
+  const trimmed = configuredCommand.trim();
+  const base = trimmed || "codex";
+  const isDefaultCodexCommand = !trimmed || /^codex(?:\.cmd|\.bat|\.exe)?$/i.test(trimmed);
+  const candidates: string[] = [];
+  const pushCandidate = (value: string | undefined) => {
+    const candidate = value?.trim();
+    if (candidate) {
+      candidates.push(candidate);
+    }
+  };
 
   if (process.platform === "win32") {
-    candidates.push("codex.cmd");
+    if (!isDefaultCodexCommand) {
+      pushCandidate(base);
+    }
 
     const appData = process.env.APPDATA;
     if (appData) {
-      candidates.push(`${appData}\\npm\\codex.cmd`);
+      pushCandidate(`${appData}\\npm\\codex.cmd`);
     }
+
+    const npmPrefixes = getNpmGlobalPrefixesFromEnv();
+    for (const prefix of npmPrefixes) {
+      pushCandidate(`${prefix}\\codex.cmd`);
+    }
+
+    // PATH-based shims are still useful as a fallback.
+    pushCandidate("codex.cmd");
 
     const userProfile = process.env.USERPROFILE;
     if (userProfile) {
-      candidates.push(`${userProfile}\\AppData\\Roaming\\npm\\codex.cmd`);
-      candidates.push(`${userProfile}\\.npm-global\\bin\\codex.cmd`);
-      candidates.push(`${userProfile}\\scoop\\shims\\codex.cmd`);
+      pushCandidate(`${userProfile}\\AppData\\Roaming\\npm\\codex.cmd`);
+      pushCandidate(`${userProfile}\\scoop\\shims\\codex.cmd`);
+      pushCandidate(`${userProfile}\\.npm-global\\bin\\codex.cmd`);
+    }
+
+    // Bare command fallback for environments where PATH is already correct.
+    pushCandidate("codex");
+  } else {
+    if (!isDefaultCodexCommand) {
+      pushCandidate(base);
+    }
+
+    for (const prefix of getNpmGlobalPrefixesFromEnv()) {
+      pushCandidate(join(prefix, "bin", "codex"));
+      pushCandidate(join(prefix, "codex"));
+    }
+
+    pushCandidate("/usr/local/bin/codex");
+    pushCandidate("/opt/homebrew/bin/codex");
+    if (process.env.HOME) {
+      pushCandidate(join(process.env.HOME, ".npm-global", "bin", "codex"));
+    }
+    pushCandidate("codex");
+  }
+
+  // Keep explicit custom command in front for user overrides.
+  if (isDefaultCodexCommand) {
+    pushCandidate(base);
+  }
+
+  return Array.from(new Set(candidates));
+}
+
+function getNpmGlobalPrefixesFromEnv(): string[] {
+  const prefixes = [process.env.npm_config_prefix, process.env.NPM_CONFIG_PREFIX]
+    .map((value) => value?.trim() || "")
+    .filter(Boolean);
+  return Array.from(new Set(prefixes));
+}
+
+async function discoverCodexCliBinary(
+  configuredCommand: string
+): Promise<{ command: string; version: string } | null> {
+  const configured = configuredCommand.trim();
+  const candidateSet = new Set<string>();
+  const add = (value: string | undefined) => {
+    const candidate = value?.trim();
+    if (candidate) {
+      candidateSet.add(candidate);
+    }
+  };
+
+  add(configured || "codex");
+  for (const candidate of getCodexCliCandidates(configuredCommand)) {
+    add(candidate);
+  }
+  for (const candidate of await getCodexCommandsFromSystemPath()) {
+    add(candidate);
+  }
+
+  for (const candidate of candidateSet) {
+    const probed = await probeCodexCandidate(candidate);
+    if (probed) {
+      return probed;
     }
   }
 
-  return Array.from(new Set(candidates.filter(Boolean)));
+  return null;
+}
+
+async function getCodexCommandsFromSystemPath(): Promise<string[]> {
+  try {
+    if (process.platform === "win32") {
+      const { stdout } = await execFileAsync("where", ["codex"], {
+        maxBuffer: 1024 * 1024,
+        env: process.env,
+        shell: false
+      });
+      return String(stdout ?? "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    }
+
+    const { stdout } = await execFileAsync("which", ["-a", "codex"], {
+      maxBuffer: 1024 * 1024,
+      env: process.env,
+      shell: false
+    });
+    return String(stdout ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function probeCodexCandidate(
+  candidate: string
+): Promise<{ command: string; version: string } | null> {
+  try {
+    const shell = shouldUseShellForCliCandidate(candidate);
+    const { stdout, stderr } = await execFileAsync(candidate, ["--version"], {
+      maxBuffer: 1024 * 1024,
+      env: process.env,
+      shell
+    });
+    const output = `${String(stdout ?? "").trim()}\n${String(stderr ?? "").trim()}`.trim();
+    if (!output) {
+      return null;
+    }
+    const firstLine = output.split(/\r?\n/)[0]?.trim() || output;
+    return {
+      command: candidate,
+      version: firstLine
+    };
+  } catch {
+    return null;
+  }
+}
+
+function areCommandsEquivalent(left: string, right: string): boolean {
+  if (process.platform === "win32") {
+    return left.trim().toLowerCase() === right.trim().toLowerCase();
+  }
+  return left.trim() === right.trim();
 }
 
 function extractTextFromUnknownResult(result: unknown): string {
@@ -856,6 +1269,22 @@ function normalizePositiveIntegerOrNull(value: number | null | undefined): numbe
     return null;
   }
   return Math.floor(value);
+}
+
+function normalizeIntegerInRange(
+  value: number | undefined,
+  min: number,
+  max: number,
+  fallback: number
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const rounded = Math.floor(value);
+  if (rounded < min || rounded > max) {
+    return fallback;
+  }
+  return rounded;
 }
 
 function asFiniteNumber(value: unknown): number | null {

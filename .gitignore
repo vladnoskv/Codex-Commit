@@ -17,3 +17,7 @@ coverage/
 Thumbs.db
 *.swp
 *.swo
+.env
+
+# Admin-only local docs
+ADMIN_ONLY_PUSH.md

@@ -2,6 +2,19 @@
 
 This document shows practical `settings.json` examples for Codex Commit Widget.
 
+Applies to extension release: `v1.7.0`.
+
+## Visual Preview
+
+Commit action in Source Control:
+
+![Source Control commit button](../media/commit-button.png)
+
+Settings examples:
+
+![Settings example 1](../media/commit-settings-1.PNG)
+![Settings example 2](../media/commit-settings-2.PNG)
+
 ## Baseline
 
 ```json
@@ -9,9 +22,17 @@ This document shows practical `settings.json` examples for Codex Commit Widget.
   "codexCommitWidget.provider": "cli",
   "codexCommitWidget.codexCommand": "codex",
   "codexCommitWidget.model": "gpt-5.1-codex-mini",
-  "codexCommitWidget.reasoningEffort": "low"
+  "codexCommitWidget.reasoningEffort": "low",
+  "codexCommitWidget.enableSidebarAction": true
 }
 ```
+
+## CLI Setup
+
+If Codex CLI is installed globally (recommended: `npm install -g @openai/codex@latest`) but not detected in VS Code:
+
+1. Run `Codex: Setup Codex CLI` from the Command Palette.
+2. Or use the sidebar action `Setup Codex CLI` in the Codex Commit view.
 
 ## Prompt Customization
 
@@ -36,21 +57,26 @@ Use these only when you want explicit control over style variability and respons
 
 Set each value to `null` to let Codex defaults apply.
 
-## Token Usage Hover Tracking
+## Token Usage Analytics
 
 ```json
 {
-  "codexCommitWidget.showTokenUsageInTooltip": true
+  "codexCommitWidget.trackTokenUsageAnalytics": true,
+  "codexCommitWidget.analyticsRetentionDays": 7
 }
 ```
 
-When enabled, hover the status-bar icon to see token totals over the last 24 hours:
+The extension auto-populates these settings from tracked runs:
 
-- Total tokens
-- Input tokens
-- Output tokens
-- Number of generations
-- Estimated-run count when exact CLI usage metadata is unavailable
+- `codexCommitWidget.analyticsSummary`
+- `codexCommitWidget.analyticsTotalTokens`
+- `codexCommitWidget.analyticsInputTokens`
+- `codexCommitWidget.analyticsOutputTokens`
+- `codexCommitWidget.analyticsGenerations`
+- `codexCommitWidget.analyticsEstimatedRuns`
+- `codexCommitWidget.analyticsLastUpdated`
+
+Entries older than `analyticsRetentionDays` are automatically cleared.
 
 ## UI Customization
 
@@ -60,12 +86,36 @@ When enabled, hover the status-bar icon to see token totals over the last 24 hou
 }
 ```
 
+Toggle the sidebar action:
+
+```json
+{
+  "codexCommitWidget.enableSidebarAction": true
+}
+```
+
 ## Auth Requirement
 
 If generation fails due to authentication, run:
 
 ```bash
-codex auth login
+codex login
 ```
 
 Then run commit generation again.
+
+## Codex CLI Version
+
+This extension is tuned for Codex CLI `0.120.0` and newer.
+
+Check your installed version:
+
+```bash
+codex --version
+```
+
+Upgrade to latest:
+
+```bash
+npm install -g @openai/codex@latest
+```
