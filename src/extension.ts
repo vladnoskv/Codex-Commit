@@ -565,7 +565,22 @@ async function updateAnalyticsSettingIfChanged(
   if (current === value) {
     return;
   }
-  await config.update(key, value, vscode.ConfigurationTarget.Global);
+  try {
+    await config.update(key, value, vscode.ConfigurationTarget.Global);
+  } catch (error: unknown) {
+    // Older/stale extension installs may not have analytics keys registered yet.
+    if (isUnregisteredConfigurationError(error)) {
+      return;
+    }
+    throw error;
+  }
+}
+
+function isUnregisteredConfigurationError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /not a registered configuration/i.test(error.message);
 }
 
 async function generateRawCommitMessage(options: {

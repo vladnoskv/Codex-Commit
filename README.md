@@ -151,6 +151,8 @@ Token usage is stored in settings (not hover UI) and auto-pruned after `analytic
 - Settings show "No settings found" or logs show `Cannot register 'codexCommitWidget.*'` / `scm/inputBox is a proposed menu identifier`:
   - Remove older installed versions of this extension and keep only the latest one.
   - In local debugging, launch with `--disable-extensions` (already configured in `.vscode/launch.json`).
+- If you see `Unable to write to User Settings because codexCommitWidget.analyticsSummary is not a registered configuration.`:
+  - Update to the latest extension version and reload VS Code.
 
 
 ## License
