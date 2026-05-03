@@ -12,7 +12,23 @@ type ScmInputBoxLike = {
   value: string;
 };
 
-type GenerationProvider = "cli" | "extensionThenCli";
+type PromptImprovementSource = {
+  prompt: string;
+  editor: vscode.TextEditor | null;
+  selection: vscode.Selection | null;
+};
+
+type GenerationProvider =
+  | "codexCli"
+  | "codexExtensionThenCli"
+  | "openai"
+  | "deepseek"
+  | "anthropic"
+  | "cohere"
+  | "gemini"
+  | "mistral"
+  | "openrouter"
+  | "customOpenAiCompatible";
 type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 type GenerationSettings = {
@@ -20,6 +36,16 @@ type GenerationSettings = {
   codexExtensionCommand: string;
   codexCommand: string;
   model: string;
+  apiKey: string;
+  openAiApiKey: string;
+  deepSeekApiKey: string;
+  anthropicApiKey: string;
+  cohereApiKey: string;
+  geminiApiKey: string;
+  mistralApiKey: string;
+  openRouterApiKey: string;
+  customOpenAiCompatibleBaseUrl: string;
+  customOpenAiCompatibleApiKey: string;
   reasoningEffort: ReasoningEffort;
   maxDiffChars: number;
   promptTemplate: string;
@@ -30,9 +56,22 @@ type GenerationSettings = {
   trackTokenUsageAnalytics: boolean;
 };
 
-type GeneratedCommitResult = {
+type GeneratedTextResult = {
   raw: string;
   usage: TokenUsageMeasurement | null;
+};
+
+type TextGenerationRequest = {
+  prompt: string;
+  cwd: string;
+  settings: GenerationSettings;
+  trackTokenUsage: boolean;
+};
+
+type ProviderClient = {
+  id: GenerationProvider;
+  label: string;
+  generate(request: TextGenerationRequest): Promise<GeneratedTextResult>;
 };
 
 type TokenUsageMeasurement = {
@@ -50,18 +89,27 @@ type TokenUsageEntry = {
   estimated: boolean;
 };
 
-const COMMAND_ID = "codexCommitWidget.generateCommitMessage";
-const SETUP_CODEX_COMMAND_ID = "codexCommitWidget.setupCodexCli";
-const OPEN_SETTINGS_COMMAND_ID = "codexCommitWidget.openSettings";
-const SIDEBAR_VIEW_ID = "codexCommitWidget.sidebar";
-const SIDEBAR_ENABLED_CONTEXT_KEY = "codexCommitWidget.sidebarEnabled";
+const CONFIG_SECTION = "aiCommitPromptHelper";
+const LEGACY_CONFIG_SECTION = "codexCommitWidget";
+const COMMAND_ID = "aiCommitPromptHelper.generateCommitMessage";
+const IMPROVE_PROMPT_COMMAND_ID = "aiCommitPromptHelper.improvePrompt";
+const SETUP_CODEX_COMMAND_ID = "aiCommitPromptHelper.setupCodexCli";
+const OPEN_SETTINGS_COMMAND_ID = "aiCommitPromptHelper.openSettings";
+const LEGACY_COMMAND_ID = "codexCommitWidget.generateCommitMessage";
+const LEGACY_IMPROVE_PROMPT_COMMAND_ID = "codexCommitWidget.improvePrompt";
+const LEGACY_SETUP_CODEX_COMMAND_ID = "codexCommitWidget.setupCodexCli";
+const LEGACY_OPEN_SETTINGS_COMMAND_ID = "codexCommitWidget.openSettings";
+const SIDEBAR_VIEW_ID = "aiCommitPromptHelper.sidebar";
+const SIDEBAR_ENABLED_CONTEXT_KEY = "aiCommitPromptHelper.sidebarEnabled";
 const DEFAULT_MODEL = "gpt-5.4-mini";
 const MIN_RECOMMENDED_CODEX_VERSION = "0.120.0";
 const DEFAULT_PROMPT_TEMPLATE =
   "You are generating a git commit message from staged changes. Return only the final commit message, no code fences, no explanations. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts supported by the diff.";
-const DEFAULT_STATUS_BAR_TEXT = "$(sparkle) Codex Commit";
-const BASE_TOOLTIP = "Generate a commit message from staged changes using Codex";
-const TOKEN_USAGE_STATE_KEY = "codexCommitWidget.tokenUsageHistory.v1";
+const DEFAULT_STATUS_BAR_TEXT = "$(sparkle) AI Commit";
+const BASE_TOOLTIP = "Generate a commit message from staged changes using the selected AI provider";
+const IMPROVE_PROMPT_TOOLTIP = "Improve selected prompt text using the selected AI provider";
+const TOKEN_USAGE_STATE_KEY = "aiCommitPromptHelper.tokenUsageHistory.v1";
+const LEGACY_TOKEN_USAGE_STATE_KEY = "codexCommitWidget.tokenUsageHistory.v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_ANALYTICS_RETENTION_DAYS = 7;
 let hasShownOutdatedCodexVersionWarning = false;
@@ -90,8 +138,29 @@ export function activate(context: vscode.ExtensionContext) {
   const commandDisposable = vscode.commands.registerCommand(COMMAND_ID, async () => {
     await generateCommitMessage(context, statusBar);
   });
+  const legacyCommandDisposable = vscode.commands.registerCommand(LEGACY_COMMAND_ID, async () => {
+    await generateCommitMessage(context, statusBar);
+  });
+  const improvePromptCommandDisposable = vscode.commands.registerCommand(
+    IMPROVE_PROMPT_COMMAND_ID,
+    async () => {
+      await improvePrompt();
+    }
+  );
+  const legacyImprovePromptCommandDisposable = vscode.commands.registerCommand(
+    LEGACY_IMPROVE_PROMPT_COMMAND_ID,
+    async () => {
+      await improvePrompt();
+    }
+  );
   const setupCommandDisposable = vscode.commands.registerCommand(
     SETUP_CODEX_COMMAND_ID,
+    async () => {
+      await setupCodexCliCommand();
+    }
+  );
+  const legacySetupCommandDisposable = vscode.commands.registerCommand(
+    LEGACY_SETUP_CODEX_COMMAND_ID,
     async () => {
       await setupCodexCliCommand();
     }
@@ -102,9 +171,18 @@ export function activate(context: vscode.ExtensionContext) {
       await openCodexWidgetSettings();
     }
   );
+  const legacyOpenSettingsCommandDisposable = vscode.commands.registerCommand(
+    LEGACY_OPEN_SETTINGS_COMMAND_ID,
+    async () => {
+      await openCodexWidgetSettings();
+    }
+  );
 
   const configChangeDisposable = vscode.workspace.onDidChangeConfiguration((event) => {
-    if (!event.affectsConfiguration("codexCommitWidget")) {
+    if (
+      !event.affectsConfiguration(CONFIG_SECTION) &&
+      !event.affectsConfiguration(LEGACY_CONFIG_SECTION)
+    ) {
       return;
     }
 
@@ -117,8 +195,13 @@ export function activate(context: vscode.ExtensionContext) {
     statusBar,
     sidebarView,
     commandDisposable,
+    legacyCommandDisposable,
+    improvePromptCommandDisposable,
+    legacyImprovePromptCommandDisposable,
     setupCommandDisposable,
+    legacySetupCommandDisposable,
     openSettingsCommandDisposable,
+    legacyOpenSettingsCommandDisposable,
     configChangeDisposable
   );
 }
@@ -144,6 +227,17 @@ class SidebarActionProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
     generateItem.iconPath = new vscode.ThemeIcon("sparkle");
     generateItem.tooltip = BASE_TOOLTIP;
 
+    const improvePromptItem = new vscode.TreeItem(
+      "Improve Prompt",
+      vscode.TreeItemCollapsibleState.None
+    );
+    improvePromptItem.command = {
+      command: IMPROVE_PROMPT_COMMAND_ID,
+      title: "Improve Prompt"
+    };
+    improvePromptItem.iconPath = new vscode.ThemeIcon("wand");
+    improvePromptItem.tooltip = IMPROVE_PROMPT_TOOLTIP;
+
     const setupItem = new vscode.TreeItem("Setup Codex CLI", vscode.TreeItemCollapsibleState.None);
     setupItem.command = {
       command: SETUP_CODEX_COMMAND_ID,
@@ -158,21 +252,21 @@ class SidebarActionProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
       title: "Open Settings"
     };
     settingsItem.iconPath = new vscode.ThemeIcon("gear");
-    settingsItem.tooltip = "Open Codex Commit Widget settings";
+    settingsItem.tooltip = "Open AI Commit & Prompt Helper settings";
 
-    return [generateItem, setupItem, settingsItem];
+    return [generateItem, improvePromptItem, setupItem, settingsItem];
   }
 }
 
 async function setupCodexCliCommand(): Promise<void> {
-  const config = vscode.workspace.getConfiguration("codexCommitWidget");
-  const configuredCommand = config.get<string>("codexCommand", "codex");
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  const configuredCommand = getConfiguredValue<string>("codexCommand", "codex");
 
   const discovered = await discoverCodexCliBinary(configuredCommand);
   if (!discovered) {
     const openSettingsAction = "Open Settings";
     const selected = await vscode.window.showErrorMessage(
-      "Codex CLI could not be auto-detected. Install Codex globally (`npm install -g @openai/codex@latest`) or set `codexCommitWidget.codexCommand` manually.",
+      "Codex CLI could not be auto-detected. Install Codex globally (`npm install -g @openai/codex@latest`) or set `aiCommitPromptHelper.codexCommand` manually.",
       openSettingsAction
     );
     if (selected === openSettingsAction) {
@@ -190,13 +284,13 @@ async function setupCodexCliCommand(): Promise<void> {
 async function openCodexWidgetSettings(): Promise<void> {
   await vscode.commands.executeCommand(
     "workbench.action.openSettings",
-    "codexCommitWidget.codexCommand"
+    CONFIG_SECTION
   );
 }
 
 async function autoConfigureCodexCliIfDefault(): Promise<void> {
-  const config = vscode.workspace.getConfiguration("codexCommitWidget");
-  const configured = config.get<string>("codexCommand", "codex").trim() || "codex";
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  const configured = getConfiguredValue<string>("codexCommand", "codex").trim() || "codex";
   if (!/^codex(?:\.cmd|\.bat|\.exe)?$/i.test(configured)) {
     return;
   }
@@ -252,7 +346,7 @@ async function generateCommitMessage(
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: "Generating commit message with Codex",
+        title: `Generating commit message with ${getProviderLabel(settings.provider)}`,
         cancellable: false
       },
       async () => {
@@ -275,24 +369,17 @@ async function generateCommitMessage(
           trimmedDiff
         );
 
-        const outputLastMessageFile = getOutputLastMessageTempPath();
-        const args = buildCodexExecArgs(settings, outputLastMessageFile);
-
-        const generated = await generateRawCommitMessage({
-          provider: settings.provider,
-          codexExtensionCommand: settings.codexExtensionCommand,
-          codexCommand: settings.codexCommand,
-          args,
+        const generated = await generateTextWithSelectedProvider({
           prompt,
           cwd: repo.rootUri.fsPath,
-          outputLastMessageFile,
+          settings,
           trackTokenUsage: settings.trackTokenUsageAnalytics
         });
 
         const message = normalizeCommitMessage(generated.raw);
 
         if (!message) {
-          throw new Error("Codex returned an empty commit message.");
+          throw new Error(`${getProviderLabel(settings.provider)} returned an empty commit message.`);
         }
 
         if (generated.usage) {
@@ -308,7 +395,9 @@ async function generateCommitMessage(
         }
 
         repo.inputBox.value = message;
-        void vscode.window.showInformationMessage("Commit message generated with Codex.");
+        void vscode.window.showInformationMessage(
+          `Commit message generated with ${getProviderLabel(settings.provider)}.`
+        );
       }
     );
   } catch (err: unknown) {
@@ -318,15 +407,278 @@ async function generateCommitMessage(
   }
 }
 
+async function improvePrompt(): Promise<void> {
+  const source = await getPromptImprovementSource();
+  if (!source) {
+    return;
+  }
+
+  const settings = readGenerationSettings();
+  const cwd = getPromptImprovementCwd(source.editor);
+
+  try {
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Improving prompt with ${getProviderLabel(settings.provider)}`,
+        cancellable: false
+      },
+      async () => {
+        const generated = await generateTextWithSelectedProvider({
+          prompt: buildPromptImprovementPrompt(source.prompt),
+          cwd,
+          settings,
+          trackTokenUsage: false
+        });
+        const improvedPrompt = normalizeImprovedPrompt(generated.raw);
+
+        if (!improvedPrompt) {
+          throw new Error(`${getProviderLabel(settings.provider)} returned an empty improved prompt.`);
+        }
+
+        await reviewImprovedPrompt(source, improvedPrompt);
+      }
+    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error while improving prompt.";
+    void vscode.window.showErrorMessage(message);
+  }
+}
+
+async function getPromptImprovementSource(): Promise<PromptImprovementSource | null> {
+  const editor = vscode.window.activeTextEditor ?? null;
+  if (editor && !editor.selection.isEmpty) {
+    const selectedText = editor.document.getText(editor.selection);
+    if (selectedText.trim()) {
+      return {
+        prompt: selectedText,
+        editor,
+        selection: editor.selection
+      };
+    }
+  }
+
+  const inputPrompt = await vscode.window.showInputBox({
+    title: "Improve Prompt",
+    prompt: "Enter the prompt you want Codex to improve.",
+    placeHolder: "Describe the coding task, constraints, and expected outcome...",
+    ignoreFocusOut: true
+  });
+
+  if (inputPrompt === undefined) {
+    return null;
+  }
+
+  if (!inputPrompt.trim()) {
+    void vscode.window.showWarningMessage("Enter a prompt before running Improve Prompt.");
+    return null;
+  }
+
+  return {
+    prompt: inputPrompt,
+    editor: null,
+    selection: null
+  };
+}
+
+function getPromptImprovementCwd(editor: vscode.TextEditor | null): string {
+  if (editor) {
+    const folder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
+    if (folder) {
+      return folder.uri.fsPath;
+    }
+  }
+
+  const firstWorkspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  return firstWorkspaceFolder?.uri.fsPath ?? process.cwd();
+}
+
+function buildPromptImprovementPrompt(userPrompt: string): string {
+  return [
+    "Rewrite the user's prompt so Codex can perform the coding task optimally.",
+    "Return only the improved prompt, with no code fences, headings, explanations, or commentary.",
+    "",
+    "The improved prompt must:",
+    "- Preserve the user's intent and avoid inventing requirements.",
+    "- Make the desired outcome explicit.",
+    "- Include relevant constraints, scope boundaries, and success criteria when implied.",
+    "- Ask for inspection before changes, minimal high-confidence edits, and validation when appropriate.",
+    "- Be concise but complete enough for a coding agent to execute.",
+    "",
+    "User prompt:",
+    userPrompt.trim()
+  ].join("\n");
+}
+
+async function reviewImprovedPrompt(
+  source: PromptImprovementSource,
+  improvedPrompt: string
+): Promise<void> {
+  await openPromptReviewDocument(source.prompt, improvedPrompt);
+
+  const actions: Array<vscode.QuickPickItem & { action: "replace" | "copy" | "open" | "cancel" }> = [];
+  if (source.editor && source.selection && !source.selection.isEmpty) {
+    actions.push({
+      label: "Replace Selection",
+      description: "Replace the original selected prompt with the improved prompt",
+      action: "replace"
+    });
+  }
+  actions.push(
+    {
+      label: "Copy Improved Prompt",
+      description: "Copy the improved prompt to the clipboard",
+      action: "copy"
+    },
+    {
+      label: "Open In New Document",
+      description: "Open only the improved prompt in an untitled editor",
+      action: "open"
+    },
+    {
+      label: "Cancel",
+      description: "Leave the original prompt unchanged",
+      action: "cancel"
+    }
+  );
+
+  const selected = await vscode.window.showQuickPick(actions, {
+    placeHolder: "Review the improved prompt, then choose what to do"
+  });
+
+  if (!selected || selected.action === "cancel") {
+    return;
+  }
+
+  if (selected.action === "copy") {
+    await vscode.env.clipboard.writeText(improvedPrompt);
+    void vscode.window.showInformationMessage("Improved prompt copied to clipboard.");
+    return;
+  }
+
+  if (selected.action === "open") {
+    await openImprovedPromptDocument(improvedPrompt);
+    return;
+  }
+
+  if (selected.action === "replace" && source.editor && source.selection) {
+    await vscode.window.showTextDocument(source.editor.document, {
+      viewColumn: source.editor.viewColumn,
+      preview: false
+    });
+    const replaced = await source.editor.edit((builder) => {
+      builder.replace(source.selection as vscode.Selection, improvedPrompt);
+    });
+    if (!replaced) {
+      throw new Error("Could not replace the selected prompt text.");
+    }
+    void vscode.window.showInformationMessage("Selected prompt replaced with improved prompt.");
+  }
+}
+
+async function openPromptReviewDocument(originalPrompt: string, improvedPrompt: string): Promise<void> {
+  const document = await vscode.workspace.openTextDocument({
+    language: "markdown",
+    content: [
+      "# Codex Prompt Review",
+      "",
+      "## Original Prompt",
+      "",
+      formatMarkdownCodeBlock(originalPrompt, "text"),
+      "",
+      "## Improved Prompt",
+      "",
+      formatMarkdownCodeBlock(improvedPrompt, "text")
+    ].join("\n")
+  });
+
+  await vscode.window.showTextDocument(document, {
+    viewColumn: vscode.ViewColumn.Beside,
+    preview: true
+  });
+}
+
+async function openImprovedPromptDocument(improvedPrompt: string): Promise<void> {
+  const document = await vscode.workspace.openTextDocument({
+    language: "plaintext",
+    content: improvedPrompt
+  });
+
+  await vscode.window.showTextDocument(document, {
+    viewColumn: vscode.ViewColumn.Beside,
+    preview: false
+  });
+}
+
+function formatMarkdownCodeBlock(text: string, language: string): string {
+  const fence = getMarkdownFence(text);
+  return `${fence}${language}\n${text.trim()}\n${fence}`;
+}
+
+function getMarkdownFence(text: string): string {
+  const matches = text.match(/`{3,}/g) ?? [];
+  const longest = matches.reduce((max, match) => Math.max(max, match.length), 2);
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
+function normalizeImprovedPrompt(raw: string): string {
+  let text = raw.trim();
+  text = stripEnclosingCodeFence(text).trim();
+  text = text.replace(/^Here(?:'s| is) (?:an? )?improved prompt:\s*/i, "");
+  text = text.replace(/^Improved prompt:\s*/i, "");
+  text = text.replace(/^"+|"+$/g, "").trim();
+  return text;
+}
+
+function stripEnclosingCodeFence(text: string): string {
+  const match = text.match(/^```[\w-]*\s*\r?\n([\s\S]*?)\r?\n?```$/);
+  if (match) {
+    return match[1];
+  }
+
+  return text;
+}
+
+function getConfiguredValue<T>(key: string, fallback: T): T {
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  if (hasExplicitConfigurationValue(config, key)) {
+    return config.get<T>(key, fallback);
+  }
+
+  const legacyConfig = vscode.workspace.getConfiguration(LEGACY_CONFIG_SECTION);
+  if (hasExplicitConfigurationValue(legacyConfig, key)) {
+    return legacyConfig.get<T>(key, fallback);
+  }
+
+  return config.get<T>(key, fallback);
+}
+
+function hasExplicitConfigurationValue(
+  config: vscode.WorkspaceConfiguration,
+  key: string
+): boolean {
+  const inspected = config.inspect<unknown>(key);
+  if (!inspected) {
+    return false;
+  }
+
+  return [
+    inspected.globalValue,
+    inspected.workspaceValue,
+    inspected.workspaceFolderValue,
+    inspected.globalLanguageValue,
+    inspected.workspaceLanguageValue,
+    inspected.workspaceFolderLanguageValue
+  ].some((value) => value !== undefined);
+}
+
 function applyStatusBarText(statusBar: vscode.StatusBarItem): void {
-  const config = vscode.workspace.getConfiguration("codexCommitWidget");
-  const configured = config.get<string>("statusBarText", DEFAULT_STATUS_BAR_TEXT).trim();
+  const configured = getConfiguredValue<string>("statusBarText", DEFAULT_STATUS_BAR_TEXT).trim();
   statusBar.text = configured || DEFAULT_STATUS_BAR_TEXT;
 }
 
 function isSidebarActionEnabled(): boolean {
-  const config = vscode.workspace.getConfiguration("codexCommitWidget");
-  return config.get<boolean>("enableSidebarAction", true);
+  return getConfiguredValue<boolean>("enableSidebarAction", true);
 }
 
 async function updateSidebarVisibilityContext(): Promise<void> {
@@ -344,38 +696,103 @@ async function updateStatusBarTooltip(
   statusBar.tooltip =
     `${BASE_TOOLTIP}\n\n` +
     "Token analytics are tracked in settings under:\n" +
-    "Codex Commit Widget > Analytics";
+    "AI Commit & Prompt Helper > Analytics";
 }
 
 function readGenerationSettings(): GenerationSettings {
-  const config = vscode.workspace.getConfiguration("codexCommitWidget");
+  const provider = normalizeGenerationProvider(
+    getConfiguredValue<string>("provider", "codexCli")
+  );
+  const configuredModel = getConfiguredValue<string>("model", "").trim();
 
   return {
-    provider: config.get<GenerationProvider>("provider", "cli"),
-    codexExtensionCommand: config.get<string>("codexExtensionCommand", "").trim(),
-    codexCommand: config.get<string>("codexCommand", "codex"),
-    model: config.get<string>("model", DEFAULT_MODEL).trim(),
-    reasoningEffort: normalizeReasoningEffort(config.get<string>("reasoningEffort", "low")),
-    maxDiffChars: normalizePositiveInteger(config.get<number>("maxDiffChars", 120000), 120000),
-    promptTemplate: config.get<string>("promptTemplate", DEFAULT_PROMPT_TEMPLATE),
-    additionalPromptInstructions: config
-      .get<string>("additionalPromptInstructions", "")
-      .trim(),
+    provider,
+    codexExtensionCommand: getConfiguredValue<string>("codexExtensionCommand", "").trim(),
+    codexCommand: getConfiguredValue<string>("codexCommand", "codex"),
+    model: configuredModel || getDefaultModelForProvider(provider),
+    apiKey: getConfiguredValue<string>("apiKey", "").trim(),
+    openAiApiKey: getConfiguredValue<string>("openAiApiKey", "").trim(),
+    deepSeekApiKey: getConfiguredValue<string>("deepSeekApiKey", "").trim(),
+    anthropicApiKey: getConfiguredValue<string>("anthropicApiKey", "").trim(),
+    cohereApiKey: getConfiguredValue<string>("cohereApiKey", "").trim(),
+    geminiApiKey: getConfiguredValue<string>("geminiApiKey", "").trim(),
+    mistralApiKey: getConfiguredValue<string>("mistralApiKey", "").trim(),
+    openRouterApiKey: getConfiguredValue<string>("openRouterApiKey", "").trim(),
+    customOpenAiCompatibleBaseUrl: getConfiguredValue<string>(
+      "customOpenAiCompatibleBaseUrl",
+      ""
+    ).trim(),
+    customOpenAiCompatibleApiKey: getConfiguredValue<string>(
+      "customOpenAiCompatibleApiKey",
+      ""
+    ).trim(),
+    reasoningEffort: normalizeReasoningEffort(getConfiguredValue<string>("reasoningEffort", "low")),
+    maxDiffChars: normalizePositiveInteger(getConfiguredValue<number>("maxDiffChars", 120000), 120000),
+    promptTemplate: getConfiguredValue<string>("promptTemplate", DEFAULT_PROMPT_TEMPLATE),
+    additionalPromptInstructions: getConfiguredValue<string>(
+      "additionalPromptInstructions",
+      ""
+    ).trim(),
     temperatureOverride: normalizeNumberInRange(
-      config.get<number | null>("temperatureOverride", null),
+      getConfiguredValue<number | null>("temperatureOverride", null),
       0,
       2
     ),
     topPOverride: normalizeNumberInRange(
-      config.get<number | null>("topPOverride", null),
+      getConfiguredValue<number | null>("topPOverride", null),
       0,
       1
     ),
     maxOutputTokensOverride: normalizePositiveIntegerOrNull(
-      config.get<number | null>("maxOutputTokensOverride", null)
+      getConfiguredValue<number | null>("maxOutputTokensOverride", null)
     ),
-    trackTokenUsageAnalytics: config.get<boolean>("trackTokenUsageAnalytics", true)
+    trackTokenUsageAnalytics: getConfiguredValue<boolean>("trackTokenUsageAnalytics", true)
   };
+}
+
+function normalizeGenerationProvider(value: string): GenerationProvider {
+  switch (value) {
+    case "cli":
+    case "codexCli":
+      return "codexCli";
+    case "extensionThenCli":
+    case "codexExtensionThenCli":
+      return "codexExtensionThenCli";
+    case "openai":
+    case "deepseek":
+    case "anthropic":
+    case "cohere":
+    case "gemini":
+    case "mistral":
+    case "openrouter":
+    case "customOpenAiCompatible":
+      return value;
+    default:
+      return "codexCli";
+  }
+}
+
+function getDefaultModelForProvider(provider: GenerationProvider): string {
+  switch (provider) {
+    case "openai":
+    case "customOpenAiCompatible":
+      return "gpt-5.4-mini";
+    case "deepseek":
+      return "deepseek-v4-flash";
+    case "anthropic":
+      return "claude-opus-4-1-20250805";
+    case "cohere":
+      return "command-a-03-2025";
+    case "gemini":
+      return "gemini-2.5-flash";
+    case "mistral":
+      return "mistral-large-latest";
+    case "openrouter":
+      return "openai/gpt-4";
+    case "codexCli":
+    case "codexExtensionThenCli":
+      return DEFAULT_MODEL;
+  }
 }
 
 function buildPrompt(
@@ -438,7 +855,9 @@ function buildCodexExecArgs(settings: GenerationSettings, outputLastMessageFile:
 }
 
 function getTokenUsageEntries(context: vscode.ExtensionContext): TokenUsageEntry[] {
-  const raw = context.globalState.get<unknown>(TOKEN_USAGE_STATE_KEY, []);
+  const raw =
+    context.globalState.get<unknown>(TOKEN_USAGE_STATE_KEY) ??
+    context.globalState.get<unknown>(LEGACY_TOKEN_USAGE_STATE_KEY, []);
   if (!Array.isArray(raw)) {
     return [];
   }
@@ -498,9 +917,8 @@ function pruneTokenUsageEntries(
 }
 
 function getAnalyticsRetentionDays(): number {
-  const config = vscode.workspace.getConfiguration("codexCommitWidget");
   return normalizeIntegerInRange(
-    config.get<number>("analyticsRetentionDays", DEFAULT_ANALYTICS_RETENTION_DAYS),
+    getConfiguredValue<number>("analyticsRetentionDays", DEFAULT_ANALYTICS_RETENTION_DAYS),
     1,
     30,
     DEFAULT_ANALYTICS_RETENTION_DAYS
@@ -510,7 +928,7 @@ function getAnalyticsRetentionDays(): number {
 async function syncTokenUsageAnalyticsSettings(
   context: vscode.ExtensionContext
 ): Promise<void> {
-  const config = vscode.workspace.getConfiguration("codexCommitWidget");
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
   const retentionDays = getAnalyticsRetentionDays();
   const entries = getTokenUsageEntries(context);
   const recent = pruneTokenUsageEntries(entries, retentionDays);
@@ -583,7 +1001,653 @@ function isUnregisteredConfigurationError(error: unknown): boolean {
   return /not a registered configuration/i.test(error.message);
 }
 
-async function generateRawCommitMessage(options: {
+async function generateTextWithSelectedProvider(
+  request: TextGenerationRequest
+): Promise<GeneratedTextResult> {
+  return getProviderClient(request.settings.provider).generate(request);
+}
+
+function getProviderClient(provider: GenerationProvider): ProviderClient {
+  switch (provider) {
+    case "codexCli":
+    case "codexExtensionThenCli":
+      return {
+        id: provider,
+        label: getProviderLabel(provider),
+        generate: generateWithCodex
+      };
+    case "openai":
+      return createOpenAiCompatibleClient(
+        provider,
+        "OpenAI",
+        "https://api.openai.com/v1",
+        (settings) => getApiKey(settings, "openai")
+      );
+    case "deepseek":
+      return createOpenAiCompatibleClient(
+        provider,
+        "DeepSeek",
+        "https://api.deepseek.com",
+        (settings) => getApiKey(settings, "deepseek")
+      );
+    case "mistral":
+      return createOpenAiCompatibleClient(
+        provider,
+        "Mistral",
+        "https://api.mistral.ai/v1",
+        (settings) => getApiKey(settings, "mistral")
+      );
+    case "openrouter":
+      return createOpenAiCompatibleClient(
+        provider,
+        "OpenRouter",
+        "https://openrouter.ai/api/v1",
+        (settings) => getApiKey(settings, "openrouter")
+      );
+    case "customOpenAiCompatible":
+      return createOpenAiCompatibleClient(
+        provider,
+        "Custom OpenAI-compatible provider",
+        "",
+        (settings) => getApiKey(settings, "customOpenAiCompatible")
+      );
+    case "anthropic":
+      return {
+        id: provider,
+        label: "Anthropic Claude",
+        generate: generateWithAnthropic
+      };
+    case "cohere":
+      return {
+        id: provider,
+        label: "Cohere",
+        generate: generateWithCohere
+      };
+    case "gemini":
+      return {
+        id: provider,
+        label: "Google Gemini",
+        generate: generateWithGemini
+      };
+  }
+}
+
+function getProviderLabel(provider: GenerationProvider): string {
+  switch (provider) {
+    case "codexCli":
+      return "Codex CLI";
+    case "codexExtensionThenCli":
+      return "Codex extension/CLI";
+    case "openai":
+      return "OpenAI";
+    case "deepseek":
+      return "DeepSeek";
+    case "anthropic":
+      return "Anthropic Claude";
+    case "cohere":
+      return "Cohere";
+    case "gemini":
+      return "Google Gemini";
+    case "mistral":
+      return "Mistral";
+    case "openrouter":
+      return "OpenRouter";
+    case "customOpenAiCompatible":
+      return "custom OpenAI-compatible provider";
+  }
+}
+
+async function generateWithCodex(request: TextGenerationRequest): Promise<GeneratedTextResult> {
+  const outputLastMessageFile = getOutputLastMessageTempPath();
+  const args = buildCodexExecArgs(request.settings, outputLastMessageFile);
+
+  return generateRawTextWithCodex({
+    provider: request.settings.provider,
+    codexExtensionCommand: request.settings.codexExtensionCommand,
+    codexCommand: request.settings.codexCommand,
+    args,
+    prompt: request.prompt,
+    cwd: request.cwd,
+    outputLastMessageFile,
+    trackTokenUsage: request.trackTokenUsage
+  });
+}
+
+function createOpenAiCompatibleClient(
+  provider: GenerationProvider,
+  label: string,
+  defaultBaseUrl: string,
+  getKey: (settings: GenerationSettings) => string
+): ProviderClient {
+  return {
+    id: provider,
+    label,
+    async generate(request: TextGenerationRequest): Promise<GeneratedTextResult> {
+      const baseUrl =
+        provider === "customOpenAiCompatible"
+          ? request.settings.customOpenAiCompatibleBaseUrl
+          : defaultBaseUrl;
+      if (!baseUrl) {
+        throw new Error(
+          "Set aiCommitPromptHelper.customOpenAiCompatibleBaseUrl before using the custom OpenAI-compatible provider."
+        );
+      }
+
+      const apiKey = getKey(request.settings);
+      if (!apiKey) {
+        throw new Error(getMissingApiKeyMessage(provider));
+      }
+
+      const body: Record<string, unknown> = {
+        model: request.settings.model,
+        messages: [{ role: "user", content: request.prompt }]
+      };
+      addSamplingOptions(body, request.settings, "max_tokens");
+
+      const json = await postJson(
+        `${baseUrl.replace(/\/+$/g, "")}/chat/completions`,
+        {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body,
+        label
+      );
+      const raw = extractTextFromOpenAiCompatibleResponse(json);
+
+      return {
+        raw,
+        usage: request.trackTokenUsage
+          ? parseOpenAiCompatibleTokenUsage(json) ?? estimateTokenUsage(request.prompt, raw)
+          : null
+      };
+    }
+  };
+}
+
+async function generateWithAnthropic(
+  request: TextGenerationRequest
+): Promise<GeneratedTextResult> {
+  const apiKey = getApiKey(request.settings, "anthropic");
+  if (!apiKey) {
+    throw new Error(getMissingApiKeyMessage("anthropic"));
+  }
+
+  const body: Record<string, unknown> = {
+    model: request.settings.model,
+    max_tokens: request.settings.maxOutputTokensOverride ?? 1024,
+    messages: [{ role: "user", content: request.prompt }]
+  };
+  addSamplingOptions(body, request.settings, "max_tokens");
+
+  const json = await postJson(
+    "https://api.anthropic.com/v1/messages",
+    {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json"
+    },
+    body,
+    "Anthropic Claude"
+  );
+  const raw = extractTextFromAnthropicResponse(json);
+
+  return {
+    raw,
+    usage: request.trackTokenUsage
+      ? parseAnthropicTokenUsage(json) ?? estimateTokenUsage(request.prompt, raw)
+      : null
+  };
+}
+
+async function generateWithCohere(request: TextGenerationRequest): Promise<GeneratedTextResult> {
+  const apiKey = getApiKey(request.settings, "cohere");
+  if (!apiKey) {
+    throw new Error(getMissingApiKeyMessage("cohere"));
+  }
+
+  const body: Record<string, unknown> = {
+    model: request.settings.model,
+    messages: [{ role: "user", content: request.prompt }]
+  };
+  addSamplingOptions(body, request.settings, "max_tokens");
+  if (request.settings.topPOverride !== null) {
+    body.p = request.settings.topPOverride;
+    delete body.top_p;
+  }
+
+  const json = await postJson(
+    "https://api.cohere.com/v2/chat",
+    {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body,
+    "Cohere"
+  );
+  const raw = extractTextFromCohereResponse(json);
+
+  return {
+    raw,
+    usage: request.trackTokenUsage
+      ? parseCohereTokenUsage(json) ?? estimateTokenUsage(request.prompt, raw)
+      : null
+  };
+}
+
+async function generateWithGemini(request: TextGenerationRequest): Promise<GeneratedTextResult> {
+  const apiKey = getApiKey(request.settings, "gemini");
+  if (!apiKey) {
+    throw new Error(getMissingApiKeyMessage("gemini"));
+  }
+
+  const generationConfig: Record<string, unknown> = {};
+  if (request.settings.temperatureOverride !== null) {
+    generationConfig.temperature = request.settings.temperatureOverride;
+  }
+  if (request.settings.topPOverride !== null) {
+    generationConfig.topP = request.settings.topPOverride;
+  }
+  if (request.settings.maxOutputTokensOverride !== null) {
+    generationConfig.maxOutputTokens = request.settings.maxOutputTokensOverride;
+  }
+
+  const body: Record<string, unknown> = {
+    contents: [{ role: "user", parts: [{ text: request.prompt }] }]
+  };
+  if (Object.keys(generationConfig).length > 0) {
+    body.generationConfig = generationConfig;
+  }
+
+  const model = request.settings.model.replace(/^models\//, "");
+  const json = await postJson(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      model
+    )}:generateContent`,
+    {
+      "x-goog-api-key": apiKey,
+      "Content-Type": "application/json"
+    },
+    body,
+    "Google Gemini"
+  );
+  const raw = extractTextFromGeminiResponse(json);
+
+  return {
+    raw,
+    usage: request.trackTokenUsage
+      ? parseGeminiTokenUsage(json) ?? estimateTokenUsage(request.prompt, raw)
+      : null
+  };
+}
+
+function addSamplingOptions(
+  body: Record<string, unknown>,
+  settings: GenerationSettings,
+  maxTokensKey: "max_tokens" | "maxOutputTokens"
+): void {
+  if (settings.temperatureOverride !== null) {
+    body.temperature = settings.temperatureOverride;
+  }
+  if (settings.topPOverride !== null) {
+    body.top_p = settings.topPOverride;
+  }
+  if (settings.maxOutputTokensOverride !== null) {
+    body[maxTokensKey] = settings.maxOutputTokensOverride;
+  }
+}
+
+function getApiKey(settings: GenerationSettings, provider: GenerationProvider): string {
+  if (settings.apiKey) {
+    return settings.apiKey;
+  }
+
+  switch (provider) {
+    case "openai":
+      return settings.openAiApiKey || process.env.OPENAI_API_KEY || "";
+    case "deepseek":
+      return settings.deepSeekApiKey || process.env.DEEPSEEK_API_KEY || "";
+    case "anthropic":
+      return settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY || "";
+    case "cohere":
+      return settings.cohereApiKey || process.env.COHERE_API_KEY || "";
+    case "gemini":
+      return (
+        settings.geminiApiKey ||
+        process.env.GEMINI_API_KEY ||
+        process.env.GOOGLE_API_KEY ||
+        ""
+      );
+    case "mistral":
+      return settings.mistralApiKey || process.env.MISTRAL_API_KEY || "";
+    case "openrouter":
+      return settings.openRouterApiKey || process.env.OPENROUTER_API_KEY || "";
+    case "customOpenAiCompatible":
+      return (
+        settings.customOpenAiCompatibleApiKey ||
+        process.env.OPENAI_COMPATIBLE_API_KEY ||
+        ""
+      );
+    case "codexCli":
+    case "codexExtensionThenCli":
+      return "";
+  }
+}
+
+function getMissingApiKeyMessage(provider: GenerationProvider): string {
+  switch (provider) {
+    case "openai":
+      return "Set aiCommitPromptHelper.openAiApiKey or OPENAI_API_KEY before using OpenAI.";
+    case "deepseek":
+      return "Set aiCommitPromptHelper.deepSeekApiKey or DEEPSEEK_API_KEY before using DeepSeek.";
+    case "anthropic":
+      return "Set aiCommitPromptHelper.anthropicApiKey or ANTHROPIC_API_KEY before using Anthropic Claude.";
+    case "cohere":
+      return "Set aiCommitPromptHelper.cohereApiKey or COHERE_API_KEY before using Cohere.";
+    case "gemini":
+      return "Set aiCommitPromptHelper.geminiApiKey, GEMINI_API_KEY, or GOOGLE_API_KEY before using Google Gemini.";
+    case "mistral":
+      return "Set aiCommitPromptHelper.mistralApiKey or MISTRAL_API_KEY before using Mistral.";
+    case "openrouter":
+      return "Set aiCommitPromptHelper.openRouterApiKey or OPENROUTER_API_KEY before using OpenRouter.";
+    case "customOpenAiCompatible":
+      return "Set aiCommitPromptHelper.customOpenAiCompatibleApiKey or OPENAI_COMPATIBLE_API_KEY before using the custom OpenAI-compatible provider.";
+    case "codexCli":
+    case "codexExtensionThenCli":
+      return "No API key is required for Codex CLI providers.";
+  }
+}
+
+async function postJson(
+  url: string,
+  headers: Record<string, string>,
+  body: Record<string, unknown>,
+  providerLabel: string
+): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body)
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown network error.";
+    throw new Error(`${providerLabel} request failed before a response was received.\n\n${message}`);
+  }
+
+  const text = await response.text();
+  const json = parseJsonText(text);
+  if (!response.ok) {
+    const details = extractHttpErrorDetails(json) || text || response.statusText;
+    throw new Error(`${providerLabel} API failed (${response.status}).\n\n${details}`);
+  }
+
+  if (json === null) {
+    throw new Error(`${providerLabel} API returned a non-JSON response.`);
+  }
+
+  return json;
+}
+
+function parseJsonText(text: string): unknown | null {
+  if (!text.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function extractHttpErrorDetails(value: unknown): string {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const record = value as Record<string, unknown>;
+  const error = record.error;
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error && typeof error === "object") {
+    const errorRecord = error as Record<string, unknown>;
+    return extractTextFromUnknownResult([
+      errorRecord.message,
+      errorRecord.type,
+      errorRecord.code
+    ]);
+  }
+
+  return extractTextFromUnknownResult([record.message, record.detail]);
+}
+
+function extractTextFromOpenAiCompatibleResponse(value: unknown): string {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const choices = (value as Record<string, unknown>).choices;
+  if (!Array.isArray(choices)) {
+    return "";
+  }
+
+  return choices
+    .map((choice) => {
+      if (!choice || typeof choice !== "object") {
+        return "";
+      }
+      const message = (choice as Record<string, unknown>).message;
+      if (!message || typeof message !== "object") {
+        return "";
+      }
+      return extractTextFromUnknownResult((message as Record<string, unknown>).content);
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function extractTextFromAnthropicResponse(value: unknown): string {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const content = (value as Record<string, unknown>).content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object") {
+        return "";
+      }
+      return extractTextFromUnknownResult((part as Record<string, unknown>).text);
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function extractTextFromCohereResponse(value: unknown): string {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const message = (value as Record<string, unknown>).message;
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+
+  const content = (message as Record<string, unknown>).content;
+  if (!Array.isArray(content)) {
+    return extractTextFromUnknownResult(content);
+  }
+
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object") {
+        return "";
+      }
+      return extractTextFromUnknownResult((part as Record<string, unknown>).text);
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function extractTextFromGeminiResponse(value: unknown): string {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const candidates = (value as Record<string, unknown>).candidates;
+  if (!Array.isArray(candidates)) {
+    return "";
+  }
+
+  return candidates
+    .map((candidate) => {
+      if (!candidate || typeof candidate !== "object") {
+        return "";
+      }
+      const content = (candidate as Record<string, unknown>).content;
+      if (!content || typeof content !== "object") {
+        return "";
+      }
+      const parts = (content as Record<string, unknown>).parts;
+      if (!Array.isArray(parts)) {
+        return "";
+      }
+      return parts
+        .map((part) => {
+          if (!part || typeof part !== "object") {
+            return "";
+          }
+          return extractTextFromUnknownResult((part as Record<string, unknown>).text);
+        })
+        .filter(Boolean)
+        .join("\n");
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function parseOpenAiCompatibleTokenUsage(value: unknown): TokenUsageMeasurement | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const usage = (value as Record<string, unknown>).usage;
+  if (!usage || typeof usage !== "object") {
+    return null;
+  }
+
+  const record = usage as Record<string, unknown>;
+  const input = asFiniteNumber(record.prompt_tokens) ?? asFiniteNumber(record.input_tokens) ?? 0;
+  const output =
+    asFiniteNumber(record.completion_tokens) ?? asFiniteNumber(record.output_tokens) ?? 0;
+  const total = asFiniteNumber(record.total_tokens) ?? input + output;
+  if (total <= 0) {
+    return null;
+  }
+
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: total,
+    estimated: false
+  };
+}
+
+function parseAnthropicTokenUsage(value: unknown): TokenUsageMeasurement | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const usage = (value as Record<string, unknown>).usage;
+  if (!usage || typeof usage !== "object") {
+    return null;
+  }
+
+  const record = usage as Record<string, unknown>;
+  const input = asFiniteNumber(record.input_tokens) ?? 0;
+  const output = asFiniteNumber(record.output_tokens) ?? 0;
+  const total = input + output;
+  if (total <= 0) {
+    return null;
+  }
+
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: total,
+    estimated: false
+  };
+}
+
+function parseCohereTokenUsage(value: unknown): TokenUsageMeasurement | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const meta = (value as Record<string, unknown>).meta;
+  if (!meta || typeof meta !== "object") {
+    return null;
+  }
+
+  const tokens = (meta as Record<string, unknown>).tokens;
+  if (!tokens || typeof tokens !== "object") {
+    return null;
+  }
+
+  const record = tokens as Record<string, unknown>;
+  const input = asFiniteNumber(record.input_tokens) ?? 0;
+  const output = asFiniteNumber(record.output_tokens) ?? 0;
+  const total = asFiniteNumber(record.total_tokens) ?? input + output;
+  if (total <= 0) {
+    return null;
+  }
+
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: total,
+    estimated: false
+  };
+}
+
+function parseGeminiTokenUsage(value: unknown): TokenUsageMeasurement | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const usage = (value as Record<string, unknown>).usageMetadata;
+  if (!usage || typeof usage !== "object") {
+    return null;
+  }
+
+  const record = usage as Record<string, unknown>;
+  const input = asFiniteNumber(record.promptTokenCount) ?? 0;
+  const output = asFiniteNumber(record.candidatesTokenCount) ?? 0;
+  const total = asFiniteNumber(record.totalTokenCount) ?? input + output;
+  if (total <= 0) {
+    return null;
+  }
+
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: total,
+    estimated: false
+  };
+}
+
+async function generateRawTextWithCodex(options: {
   provider: GenerationProvider;
   codexExtensionCommand: string;
   codexCommand: string;
@@ -592,7 +1656,7 @@ async function generateRawCommitMessage(options: {
   cwd: string;
   outputLastMessageFile: string;
   trackTokenUsage: boolean;
-}): Promise<GeneratedCommitResult> {
+}): Promise<GeneratedTextResult> {
   const {
     provider,
     codexExtensionCommand,
@@ -605,7 +1669,7 @@ async function generateRawCommitMessage(options: {
   } = options;
 
   try {
-    if (provider === "extensionThenCli" && codexExtensionCommand) {
+    if (provider === "codexExtensionThenCli" && codexExtensionCommand) {
       const extensionRaw = await tryGenerateViaExtensionCommand(
         codexExtensionCommand,
         prompt,
@@ -648,7 +1712,7 @@ async function tryGenerateViaExtensionCommand(
     const result = await vscode.commands.executeCommand(commandId, {
       prompt,
       cwd,
-      source: "codex-commit-widget"
+      source: "ai-commit-prompt-helper"
     });
     return extractTextFromUnknownResult(result);
   } catch {
@@ -818,9 +1882,9 @@ async function runCodexCli(
       `Tried: ${attempted}\n\n` +
       "Fix one of these:\n" +
       "1) Install Codex CLI and ensure VS Code can access it in PATH.\n" +
-      "2) Set `codexCommitWidget.codexCommand` to the full executable path (for Windows, commonly `%APPDATA%\\\\npm\\\\codex.cmd`).\n" +
-      "3) Run `Codex: Setup Codex CLI` from the Command Palette (or sidebar).\n" +
-      "4) Use extension mode by setting `codexCommitWidget.provider` to `extensionThenCli` and configuring `codexCommitWidget.codexExtensionCommand`.\n\n" +
+      "2) Set `aiCommitPromptHelper.codexCommand` to the full executable path (for Windows, commonly `%APPDATA%\\\\npm\\\\codex.cmd`).\n" +
+      "3) Run `AI Helper: Setup Codex CLI` from the Command Palette (or sidebar).\n" +
+      "4) Use extension mode by setting `aiCommitPromptHelper.provider` to `codexExtensionThenCli` and configuring `aiCommitPromptHelper.codexExtensionCommand`.\n\n" +
       enoentMessage
   );
 }
@@ -888,7 +1952,7 @@ function getAuthRequiredMessage(
 
   return (
     "You must be logged into a Codex auth session to use commit generation.\n" +
-    "Run `codex login` in a terminal, then try again. If you have multiple Codex installs, set `codexCommitWidget.codexCommand` to the exact binary you logged into." +
+    "Run `codex login` in a terminal, then try again. If you have multiple Codex installs, set `aiCommitPromptHelper.codexCommand` to the exact binary you logged into." +
     triedSuffix +
     detailsSuffix
   );
@@ -1223,7 +2287,7 @@ function extractTokenCount(text: string, patterns: RegExp[]): number | null {
 
 function getOutputLastMessageTempPath(): string {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  return join(tmpdir(), `codex-commit-widget-${suffix}.txt`);
+  return join(tmpdir(), `ai-commit-prompt-helper-${suffix}.txt`);
 }
 
 async function readOutputLastMessage(path: string): Promise<string> {

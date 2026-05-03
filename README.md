@@ -1,26 +1,29 @@
-# Codex Commit Widget v1.7.1
+# AI Commit & Prompt Helper v2.0.1
 
-![Codex Commit Widget logo](media/logo.png)
+![AI Commit & Prompt Helper logo](media/logo.png)
 
-**DISCLAIMER** Note: This is an independent project. It is not affiliated with OpenAI. 
-"Codex" is a trademarked name and is used here for naming purposes only. 
-No endorsement or association is implied.
+Generate structured, review-friendly commit messages from staged Git changes and improve coding prompts in VS Code using Codex CLI or popular LLM APIs.
 
-Generate structured, review-friendly commit messages in VS Code from staged Git changes using Codex.
-
-Current extension release: `v1.7.1`.
+Current extension release: `v2.0.1`.
 
 ## Release Notes
 
-### v1.7.1
+### v2.0.1
 
-- Changed the default `codexCommitWidget.model` to `gpt-5.4-mini` for ChatGPT-account compatibility.
+- Fixed `aiCommitPromptHelper.improvePrompt` not found by adding explicit command activation events.
+
+### v2.0.0
+
+- Renamed the extension package to **AI Commit & Prompt Helper** (`ai-commit-prompt-helper`).
+- Added a provider interface for Codex CLI, OpenAI-compatible APIs, Anthropic Claude, Cohere, Google Gemini, Mistral, DeepSeek, OpenRouter, and custom OpenAI-compatible endpoints.
+- Added `AI Helper: Improve Prompt` for selected editor text, with review before copy/open/replace.
+- Moved settings to `aiCommitPromptHelper.*`; existing `codexCommitWidget.*` values are still read as fallbacks.
 
 ## Install
 
 Install as a VS Code extension:
 
-- From Marketplace: search for **Codex Commit Widget**
+- From Marketplace: search for **AI Commit & Prompt Helper**
 - Or from a `.vsix` build: `Extensions: Install from VSIX...`
 
 ## Quick Start
@@ -28,24 +31,35 @@ Install as a VS Code extension:
 1. Open a Git repository in VS Code.
 2. Stage the files you want to commit.
 3. Generate using either entry point:
-   - Source Control title button (Codex icon)
-   - Activity Bar -> **Codex Commit** -> **Generate Commit Message**
+   - Source Control title button
+   - Activity Bar -> **AI Helper** -> **Generate Commit Message**
 4. The generated message is written directly into the commit message box.
 
-## UI Preview
+To improve a coding prompt, select prompt text in an editor and run **AI Helper: Improve Prompt**
+from the Command Palette or Activity Bar -> **AI Helper** -> **Improve Prompt**. If no text is
+selected, the extension asks for a prompt, then shows a review document before you copy,
+open, or replace the improved version.
 
-Source Control commit button:
+## Providers
 
-![Source Control commit button](media/commit-button.png)
+Set `aiCommitPromptHelper.provider` to one of:
 
-Settings examples:
+- `codexCli` (default)
+- `codexExtensionThenCli`
+- `openai`
+- `deepseek`
+- `anthropic`
+- `cohere`
+- `gemini`
+- `mistral`
+- `openrouter`
+- `customOpenAiCompatible`
 
-![Settings example 1](media/commit-settings-1.PNG)
-![Settings example 2](media/commit-settings-2.PNG)
+HTTP providers use provider-specific API key settings or environment variables. Prefer environment variables for secrets.
 
-## What It Uses
+## What It Sends
 
-The extension sends staged context (not unstaged changes):
+Commit generation sends staged context only:
 
 - Repository name
 - Repository status
@@ -53,107 +67,80 @@ The extension sends staged context (not unstaged changes):
 - Diff stats
 - Staged patch
 
-## Data Handling
-
-- This extension does not collect telemetry.
-- It sends prompt context to your configured Codex backend only when you trigger generation.
-- Prompt context includes staged Git content and excludes unstaged changes.
-- Absolute local repository paths are not sent.
-
-## Authentication Requirement
-
-You must be logged into Codex to generate messages.
-
-If your session is missing/expired, the extension shows a fallback message and tells you to run:
-
-```bash
-codex login
-```
-
-Then run generation again.
-
-## Codex CLI Version
-
-This extension is tuned for Codex CLI `0.120.0` and newer.
-
-Check your version:
-
-```bash
-codex --version
-```
-
-Upgrade to the latest version:
-
-```bash
-npm install -g @openai/codex@latest
-```
-
-If you installed with Homebrew:
-
-```bash
-brew upgrade --cask codex
-```
+Prompt improvement sends only the selected/input prompt text. Absolute local repository paths are not sent.
 
 ## Settings
 
 Core:
 
-- `codexCommitWidget.provider`
-  - `cli` (default) or `extensionThenCli`
-- `codexCommitWidget.codexCommand`
-  - Codex CLI path/name (default: `codex`)
-  - With the default `codex`, the extension now prioritizes common npm global install paths (for `npm install -g @openai/codex@latest`) before PATH-only fallbacks.
-- `codexCommitWidget.codexExtensionCommand`
-  - Optional extension command ID for `extensionThenCli`
-- `codexCommitWidget.model`
-- `codexCommitWidget.reasoningEffort`
-- `codexCommitWidget.maxDiffChars`
+- `aiCommitPromptHelper.provider`
+- `aiCommitPromptHelper.model`
+- `aiCommitPromptHelper.reasoningEffort`
+- `aiCommitPromptHelper.maxDiffChars`
+- `aiCommitPromptHelper.codexCommand`
+- `aiCommitPromptHelper.codexExtensionCommand`
+- `aiCommitPromptHelper.customOpenAiCompatibleBaseUrl`
+
+API keys:
+
+- `aiCommitPromptHelper.openAiApiKey` or `OPENAI_API_KEY`
+- `aiCommitPromptHelper.deepSeekApiKey` or `DEEPSEEK_API_KEY`
+- `aiCommitPromptHelper.anthropicApiKey` or `ANTHROPIC_API_KEY`
+- `aiCommitPromptHelper.cohereApiKey` or `COHERE_API_KEY`
+- `aiCommitPromptHelper.geminiApiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
+- `aiCommitPromptHelper.mistralApiKey` or `MISTRAL_API_KEY`
+- `aiCommitPromptHelper.openRouterApiKey` or `OPENROUTER_API_KEY`
+- `aiCommitPromptHelper.customOpenAiCompatibleApiKey` or `OPENAI_COMPATIBLE_API_KEY`
+- `aiCommitPromptHelper.apiKey` as a generic override for the selected HTTP provider
 
 Prompt/style customization:
 
-- `codexCommitWidget.promptTemplate`
-- `codexCommitWidget.additionalPromptInstructions`
-- `codexCommitWidget.temperatureOverride`
-- `codexCommitWidget.topPOverride`
-- `codexCommitWidget.maxOutputTokensOverride`
+- `aiCommitPromptHelper.promptTemplate`
+- `aiCommitPromptHelper.additionalPromptInstructions`
+- `aiCommitPromptHelper.temperatureOverride`
+- `aiCommitPromptHelper.topPOverride`
+- `aiCommitPromptHelper.maxOutputTokensOverride`
 
 UI and usage:
 
-- `codexCommitWidget.statusBarText`
-- `codexCommitWidget.enableSidebarAction`
-  - Enables/disables the Activity Bar sidebar action (default: enabled)
-- `codexCommitWidget.trackTokenUsageAnalytics`
-  - Tracks token usage analytics for commit generations (default: enabled)
-- `codexCommitWidget.analyticsRetentionDays`
-  - Retention window for analytics (default: `7` days; auto-clears older entries)
-- `codexCommitWidget.analyticsSummary`
-- `codexCommitWidget.analyticsTotalTokens`
-- `codexCommitWidget.analyticsInputTokens`
-- `codexCommitWidget.analyticsOutputTokens`
-- `codexCommitWidget.analyticsGenerations`
-- `codexCommitWidget.analyticsEstimatedRuns`
-- `codexCommitWidget.analyticsLastUpdated`
-  - Auto-managed analytics fields written by the extension
+- `aiCommitPromptHelper.statusBarText`
+- `aiCommitPromptHelper.enableSidebarAction`
+- `AI Helper: Improve Prompt`
+- `aiCommitPromptHelper.trackTokenUsageAnalytics`
+- `aiCommitPromptHelper.analyticsRetentionDays`
+- `aiCommitPromptHelper.analyticsSummary`
+- `aiCommitPromptHelper.analyticsTotalTokens`
+- `aiCommitPromptHelper.analyticsInputTokens`
+- `aiCommitPromptHelper.analyticsOutputTokens`
+- `aiCommitPromptHelper.analyticsGenerations`
+- `aiCommitPromptHelper.analyticsEstimatedRuns`
+- `aiCommitPromptHelper.analyticsLastUpdated`
 
 Detailed examples: [`docs/configuration.md`](docs/configuration.md)
 
+## Codex CLI
+
+Codex CLI remains supported for local authenticated Codex sessions.
+
+```bash
+codex login
+codex --version
+npm install -g @openai/codex@latest
+```
+
+This extension is tuned for Codex CLI `0.120.0` and newer.
+
 ## Token Usage Analytics
 
-Token usage is stored in settings (not hover UI) and auto-pruned after `analyticsRetentionDays` (default `7` days).
+Token usage is stored in settings and auto-pruned after `analyticsRetentionDays` (default `7` days). Providers that do not return usage metadata fall back to an estimate.
 
 ## Troubleshooting
 
 - No repository detected: open a folder/workspace with a Git repo.
 - No staged changes: stage files before generating.
-- Codex command not found: run `Codex: Setup Codex CLI` from the Command Palette or sidebar, or set `codexCommitWidget.codexCommand` manually.
-- Auth/session errors: run `codex login` (or `codex auth login` on older CLI versions).
-- Old Codex version: run `codex --version`; if below `0.120.0`, upgrade with `npm install -g @openai/codex@latest`.
-- Settings show "No settings found" or logs show `Cannot register 'codexCommitWidget.*'` / `scm/inputBox is a proposed menu identifier`:
-  - Remove older installed versions of this extension and keep only the latest one.
-  - In local debugging, launch with `--disable-extensions` (already configured in `.vscode/launch.json`).
-- If you see `Unable to write to User Settings because codexCommitWidget.analyticsSummary is not a registered configuration.`:
-  - Update to the latest extension version and reload VS Code.
-
+- Codex command not found: run `AI Helper: Setup Codex CLI` or set `aiCommitPromptHelper.codexCommand`.
+- HTTP provider auth errors: set the matching API key setting or environment variable.
+- Legacy settings: v2 reads existing `codexCommitWidget.*` values as fallbacks, but new settings should use `aiCommitPromptHelper.*`.
 
 ## License
 

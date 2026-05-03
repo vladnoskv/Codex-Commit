@@ -1,10 +1,8 @@
 # Configuration Guide
 
-This document shows practical `settings.json` examples for Codex Commit Widget.
+This document shows practical `settings.json` examples for **AI Commit & Prompt Helper**.
 
-Applies to extension release: `v1.7.1`.
-
-Model update in `v1.7.1`: default `codexCommitWidget.model` is now `gpt-5.4-mini`.
+Applies to extension release: `v2.0.1`.
 
 ## Visual Preview
 
@@ -21,29 +19,127 @@ Settings examples:
 
 ```json
 {
-  "codexCommitWidget.provider": "cli",
-  "codexCommitWidget.codexCommand": "codex",
-  "codexCommitWidget.model": "gpt-5.4-mini",
-  "codexCommitWidget.reasoningEffort": "low",
-  "codexCommitWidget.enableSidebarAction": true
+  "aiCommitPromptHelper.provider": "codexCli",
+  "aiCommitPromptHelper.codexCommand": "codex",
+  "aiCommitPromptHelper.model": "",
+  "aiCommitPromptHelper.reasoningEffort": "low",
+  "aiCommitPromptHelper.enableSidebarAction": true
 }
 ```
 
+Leave `model` empty to use the built-in default for the selected provider.
+
+## Provider Examples
+
+OpenAI:
+
+```json
+{
+  "aiCommitPromptHelper.provider": "openai",
+  "aiCommitPromptHelper.model": "gpt-5.4-mini",
+  "aiCommitPromptHelper.openAiApiKey": ""
+}
+```
+
+DeepSeek:
+
+```json
+{
+  "aiCommitPromptHelper.provider": "deepseek",
+  "aiCommitPromptHelper.model": "deepseek-v4-flash",
+  "aiCommitPromptHelper.deepSeekApiKey": ""
+}
+```
+
+Anthropic Claude:
+
+```json
+{
+  "aiCommitPromptHelper.provider": "anthropic",
+  "aiCommitPromptHelper.model": "claude-opus-4-1-20250805",
+  "aiCommitPromptHelper.anthropicApiKey": ""
+}
+```
+
+Google Gemini:
+
+```json
+{
+  "aiCommitPromptHelper.provider": "gemini",
+  "aiCommitPromptHelper.model": "gemini-2.5-flash",
+  "aiCommitPromptHelper.geminiApiKey": ""
+}
+```
+
+Mistral, Cohere, OpenRouter, and custom OpenAI-compatible endpoints:
+
+```json
+{
+  "aiCommitPromptHelper.provider": "mistral",
+  "aiCommitPromptHelper.model": "mistral-large-latest",
+  "aiCommitPromptHelper.mistralApiKey": ""
+}
+```
+
+```json
+{
+  "aiCommitPromptHelper.provider": "cohere",
+  "aiCommitPromptHelper.model": "command-a-03-2025",
+  "aiCommitPromptHelper.cohereApiKey": ""
+}
+```
+
+```json
+{
+  "aiCommitPromptHelper.provider": "openrouter",
+  "aiCommitPromptHelper.model": "openai/gpt-4",
+  "aiCommitPromptHelper.openRouterApiKey": ""
+}
+```
+
+```json
+{
+  "aiCommitPromptHelper.provider": "customOpenAiCompatible",
+  "aiCommitPromptHelper.customOpenAiCompatibleBaseUrl": "https://api.example.com/v1",
+  "aiCommitPromptHelper.model": "provider-model-id",
+  "aiCommitPromptHelper.customOpenAiCompatibleApiKey": ""
+}
+```
+
+Prefer environment variables for API keys:
+
+- `OPENAI_API_KEY`
+- `DEEPSEEK_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `COHERE_API_KEY`
+- `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+- `MISTRAL_API_KEY`
+- `OPENROUTER_API_KEY`
+- `OPENAI_COMPATIBLE_API_KEY`
+
 ## CLI Setup
 
-If Codex CLI is installed globally (recommended: `npm install -g @openai/codex@latest`) but not detected in VS Code:
+If Codex CLI is installed globally but not detected in VS Code:
 
-1. Run `Codex: Setup Codex CLI` from the Command Palette.
-2. Or use the sidebar action `Setup Codex CLI` in the Codex Commit view.
+1. Run `AI Helper: Setup Codex CLI` from the Command Palette.
+2. Or use the sidebar action `Setup Codex CLI` in the AI Helper view.
 
 ## Prompt Customization
 
 ```json
 {
-  "codexCommitWidget.promptTemplate": "You are generating a git commit message from staged changes. Return only the commit message. Use conventional commits and include a short risk audit.",
-  "codexCommitWidget.additionalPromptInstructions": "Prefer imperative verbs in subject lines. Mention migrations explicitly if present. Keep sections concise."
+  "aiCommitPromptHelper.promptTemplate": "You are generating a git commit message from staged changes. Return only the commit message. Use conventional commits and include a short risk audit.",
+  "aiCommitPromptHelper.additionalPromptInstructions": "Prefer imperative verbs in subject lines. Mention migrations explicitly if present. Keep sections concise."
 }
 ```
+
+## Improve Prompt
+
+Run `AI Helper: Improve Prompt` from the Command Palette or the AI Helper sidebar to
+rewrite selected editor text into a clearer coding-agent prompt. If no text is selected,
+the extension asks for prompt text first. It uses the same configured provider, model,
+API key, reasoning effort, and sampling overrides, then opens a review document before
+you copy, open, or replace the result.
 
 ## Sampling Overrides
 
@@ -51,73 +147,34 @@ Use these only when you want explicit control over style variability and respons
 
 ```json
 {
-  "codexCommitWidget.temperatureOverride": 0.2,
-  "codexCommitWidget.topPOverride": 0.95,
-  "codexCommitWidget.maxOutputTokensOverride": 500
+  "aiCommitPromptHelper.temperatureOverride": 0.2,
+  "aiCommitPromptHelper.topPOverride": 0.95,
+  "aiCommitPromptHelper.maxOutputTokensOverride": 500
 }
 ```
 
-Set each value to `null` to let Codex defaults apply.
+Set each value to `null` to let provider defaults apply.
 
 ## Token Usage Analytics
 
 ```json
 {
-  "codexCommitWidget.trackTokenUsageAnalytics": true,
-  "codexCommitWidget.analyticsRetentionDays": 7
+  "aiCommitPromptHelper.trackTokenUsageAnalytics": true,
+  "aiCommitPromptHelper.analyticsRetentionDays": 7
 }
 ```
 
 The extension auto-populates these settings from tracked runs:
 
-- `codexCommitWidget.analyticsSummary`
-- `codexCommitWidget.analyticsTotalTokens`
-- `codexCommitWidget.analyticsInputTokens`
-- `codexCommitWidget.analyticsOutputTokens`
-- `codexCommitWidget.analyticsGenerations`
-- `codexCommitWidget.analyticsEstimatedRuns`
-- `codexCommitWidget.analyticsLastUpdated`
+- `aiCommitPromptHelper.analyticsSummary`
+- `aiCommitPromptHelper.analyticsTotalTokens`
+- `aiCommitPromptHelper.analyticsInputTokens`
+- `aiCommitPromptHelper.analyticsOutputTokens`
+- `aiCommitPromptHelper.analyticsGenerations`
+- `aiCommitPromptHelper.analyticsEstimatedRuns`
+- `aiCommitPromptHelper.analyticsLastUpdated`
 
-Entries older than `analyticsRetentionDays` are automatically cleared.
+## Migration From v1
 
-## UI Customization
-
-```json
-{
-  "codexCommitWidget.statusBarText": "$(sparkle) Smart Commit"
-}
-```
-
-Toggle the sidebar action:
-
-```json
-{
-  "codexCommitWidget.enableSidebarAction": true
-}
-```
-
-## Auth Requirement
-
-If generation fails due to authentication, run:
-
-```bash
-codex login
-```
-
-Then run commit generation again.
-
-## Codex CLI Version
-
-This extension is tuned for Codex CLI `0.120.0` and newer.
-
-Check your installed version:
-
-```bash
-codex --version
-```
-
-Upgrade to latest:
-
-```bash
-npm install -g @openai/codex@latest
-```
+New settings use `aiCommitPromptHelper.*`. Existing `codexCommitWidget.*` values are read
+as fallbacks, but update your settings to the new namespace when practical.
