@@ -21,7 +21,7 @@ Current extension release: `v2.0.2`.
 
 ### v2.0.0
 
-- Renamed the extension package to **AI Commit & Prompt Helper** (`ai-commit-prompt-helper`).
+- Rebranded the extension display name to **AI Commit & Prompt Helper** while keeping the Marketplace extension ID `codex-commit-widget`.
 - Added a provider interface for Codex CLI, OpenAI-compatible APIs, Anthropic Claude, Cohere, Google Gemini, Mistral, DeepSeek, OpenRouter, Hugging Face, and custom OpenAI-compatible endpoints.
 - Added `AI Helper: Improve Prompt` for selected editor text, with review before copy/open/replace.
 - Moved settings to `aiCommitPromptHelper.*`; existing `codexCommitWidget.*` values are still read as fallbacks.

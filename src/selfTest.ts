@@ -1,4 +1,6 @@
 import { strict as assert } from "node:assert";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   PROVIDER_MODE_DEFINITIONS,
   getDefaultModelForProvider,
@@ -6,6 +8,21 @@ import {
   normalizeGenerationProvider,
   resolveApiKeyValue
 } from "./providers";
+
+function readJsonFile<T>(relativePath: string): T {
+  return JSON.parse(readFileSync(join(__dirname, "..", relativePath), "utf8")) as T;
+}
+
+function testPackageIdentityMatchesMarketplaceExtensionPath(): void {
+  const packageManifest = readJsonFile<{ name: string }>("package.json");
+  const packageLock = readJsonFile<{ name: string; packages: Record<string, { name?: string }> }>(
+    "package-lock.json"
+  );
+
+  assert.equal(packageManifest.name, "codex-commit-widget");
+  assert.equal(packageLock.name, "codex-commit-widget");
+  assert.equal(packageLock.packages[""].name, "codex-commit-widget");
+}
 
 function testHuggingFaceProviderMetadata(): void {
   const definition = PROVIDER_MODE_DEFINITIONS.huggingface;
@@ -65,6 +82,7 @@ function testApiKeyResolutionPrefersSecretsBeforeLegacyAndEnvironment(): void {
   );
 }
 
+testPackageIdentityMatchesMarketplaceExtensionPath();
 testHuggingFaceProviderMetadata();
 testOpenRouterLowCostPresets();
 testApiKeyResolutionPrefersSecretsBeforeLegacyAndEnvironment();
