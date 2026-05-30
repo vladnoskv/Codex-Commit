@@ -2,7 +2,7 @@
   "name": "codex-commit-widget",
   "displayName": "AI Commit & Prompt Helper",
   "description": "Generate structured AI commit messages in VS Code with Codex CLI, OpenRouter, Hugging Face, and OpenAI-compatible LLM APIs.",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "license": "MIT",
   "publisher": "VladNoskov",
   "icon": "media/logo.png",
@@ -43,22 +43,13 @@
     "SCM Providers"
   ],
   "activationEvents": [
-    "onStartupFinished",
-    "onView:aiCommitPromptHelper.sidebar",
-    "onCommand:aiCommitPromptHelper.generateCommitMessage",
-    "onCommand:aiCommitPromptHelper.improvePrompt",
-    "onCommand:aiCommitPromptHelper.setupCodexCli",
-    "onCommand:aiCommitPromptHelper.openSettings",
-    "onCommand:codexCommitWidget.generateCommitMessage",
-    "onCommand:codexCommitWidget.improvePrompt",
-    "onCommand:codexCommitWidget.setupCodexCli",
-    "onCommand:codexCommitWidget.openSettings"
+    "onStartupFinished"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "aiCommitPromptHelper.generateCommitMessage",
+        "command": "codexCommitWidget.generateCommitMessage",
         "title": "AI Helper: Generate Commit Message",
         "icon": {
           "light": "media/commit-light.svg",
@@ -66,40 +57,41 @@
         }
       },
       {
-        "command": "aiCommitPromptHelper.improvePrompt",
+        "command": "codexCommitWidget.improvePrompt",
         "title": "AI Helper: Improve Prompt"
       },
       {
-        "command": "aiCommitPromptHelper.setupCodexCli",
+        "command": "codexCommitWidget.setupCodexCli",
         "title": "AI Helper: Setup Codex CLI"
       },
       {
-        "command": "aiCommitPromptHelper.openSettings",
+        "command": "codexCommitWidget.openSettings",
         "title": "AI Helper: Open Settings"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "aiCommitPromptHelper",
+          "id": "codexCommitWidget",
           "title": "AI Helper",
           "icon": "media/commit-light.svg"
         }
       ]
     },
     "views": {
-      "aiCommitPromptHelper": [
+      "codexCommitWidget": [
         {
-          "id": "aiCommitPromptHelper.sidebar",
+          "id": "codexCommitWidget.sidebar",
           "name": "Actions",
-          "when": "aiCommitPromptHelper.sidebarEnabled"
+          "icon": "media/commit-light.svg",
+          "when": "codexCommitWidget.sidebarEnabled"
         }
       ]
     },
     "menus": {
       "scm/title": [
         {
-          "command": "aiCommitPromptHelper.generateCommitMessage",
+          "command": "codexCommitWidget.generateCommitMessage",
           "when": "scmProvider == git",
           "group": "navigation@20"
         }
@@ -108,7 +100,7 @@
     "configuration": {
       "title": "AI Commit & Prompt Helper",
       "properties": {
-        "aiCommitPromptHelper.provider": {
+        "codexCommitWidget.provider": {
           "type": "string",
           "enum": [
             "codexCli",
@@ -126,22 +118,22 @@
           "default": "codexCli",
           "description": "Generation backend. Use Codex CLI, a configured Codex extension command, or a supported HTTP LLM API."
         },
-        "aiCommitPromptHelper.codexExtensionCommand": {
+        "codexCommitWidget.codexExtensionCommand": {
           "type": "string",
           "default": "",
           "description": "Optional VS Code command ID for a Codex-enabled extension integration. Used when provider is codexExtensionThenCli."
         },
-        "aiCommitPromptHelper.codexCommand": {
+        "codexCommitWidget.codexCommand": {
           "type": "string",
           "default": "codex",
           "description": "Path or command name for the Codex CLI."
         },
-        "aiCommitPromptHelper.model": {
+        "codexCommitWidget.model": {
           "type": "string",
           "default": "",
           "description": "Model ID for the selected provider. Leave empty to use the extension default for that provider."
         },
-        "aiCommitPromptHelper.reasoningEffort": {
+        "codexCommitWidget.reasoningEffort": {
           "type": "string",
           "enum": [
             "none",
@@ -154,32 +146,32 @@
           "default": "low",
           "description": "Reasoning effort sent to providers that support a compatible setting. Codex CLI receives model_reasoning_effort."
         },
-        "aiCommitPromptHelper.maxDiffChars": {
+        "codexCommitWidget.maxDiffChars": {
           "type": "number",
           "default": 120000,
           "description": "Maximum number of diff characters sent to the selected AI provider."
         },
-        "aiCommitPromptHelper.statusBarText": {
+        "codexCommitWidget.statusBarText": {
           "type": "string",
           "default": "$(sparkle) AI Commit",
           "description": "Status bar label for the commit generator action."
         },
-        "aiCommitPromptHelper.enableSidebarAction": {
+        "codexCommitWidget.enableSidebarAction": {
           "type": "boolean",
           "default": true,
           "description": "Show the AI Helper sidebar action in the Activity Bar."
         },
-        "aiCommitPromptHelper.promptTemplate": {
+        "codexCommitWidget.promptTemplate": {
           "type": "string",
           "default": "You are generating a git commit message from staged changes. Return only the final commit message text: no preface, no code fences, no markdown wrapper, no explanations outside the commit message. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts directly supported by the staged diff. If validation is not shown in the diff, say not run or not shown rather than inventing it.",
           "description": "Prompt prefix sent to the selected AI provider before status, file list, stats, and patch."
         },
-        "aiCommitPromptHelper.additionalPromptInstructions": {
+        "codexCommitWidget.additionalPromptInstructions": {
           "type": "string",
           "default": "",
           "description": "Optional extra prompt instructions appended before repository/diff context."
         },
-        "aiCommitPromptHelper.temperatureOverride": {
+        "codexCommitWidget.temperatureOverride": {
           "type": [
             "number",
             "null"
@@ -189,7 +181,7 @@
           "maximum": 2,
           "description": "Optional override for sampling temperature. Leave null to use provider defaults."
         },
-        "aiCommitPromptHelper.topPOverride": {
+        "codexCommitWidget.topPOverride": {
           "type": [
             "number",
             "null"
@@ -199,7 +191,7 @@
           "maximum": 1,
           "description": "Optional override for top-p sampling. Leave null to use provider defaults."
         },
-        "aiCommitPromptHelper.maxOutputTokensOverride": {
+        "codexCommitWidget.maxOutputTokensOverride": {
           "type": [
             "number",
             "null"
@@ -208,104 +200,104 @@
           "minimum": 1,
           "description": "Optional max output token override. Leave null to use provider defaults."
         },
-        "aiCommitPromptHelper.apiKey": {
+        "codexCommitWidget.apiKey": {
           "type": "string",
           "default": "",
           "description": "Optional API key override for the selected HTTP provider. Prefer environment variables for secrets."
         },
-        "aiCommitPromptHelper.openAiApiKey": {
+        "codexCommitWidget.openAiApiKey": {
           "type": "string",
           "default": "",
           "description": "OpenAI API key. Falls back to OPENAI_API_KEY."
         },
-        "aiCommitPromptHelper.deepSeekApiKey": {
+        "codexCommitWidget.deepSeekApiKey": {
           "type": "string",
           "default": "",
           "description": "DeepSeek API key. Falls back to DEEPSEEK_API_KEY."
         },
-        "aiCommitPromptHelper.anthropicApiKey": {
+        "codexCommitWidget.anthropicApiKey": {
           "type": "string",
           "default": "",
           "description": "Anthropic API key. Falls back to ANTHROPIC_API_KEY."
         },
-        "aiCommitPromptHelper.cohereApiKey": {
+        "codexCommitWidget.cohereApiKey": {
           "type": "string",
           "default": "",
           "description": "Cohere API key. Falls back to COHERE_API_KEY."
         },
-        "aiCommitPromptHelper.geminiApiKey": {
+        "codexCommitWidget.geminiApiKey": {
           "type": "string",
           "default": "",
           "description": "Google Gemini API key. Falls back to GEMINI_API_KEY or GOOGLE_API_KEY."
         },
-        "aiCommitPromptHelper.mistralApiKey": {
+        "codexCommitWidget.mistralApiKey": {
           "type": "string",
           "default": "",
           "description": "Mistral API key. Falls back to MISTRAL_API_KEY."
         },
-        "aiCommitPromptHelper.openRouterApiKey": {
+        "codexCommitWidget.openRouterApiKey": {
           "type": "string",
           "default": "",
           "description": "Legacy OpenRouter API key setting. Prefer the setup panel, which stores keys in VS Code SecretStorage. Falls back to OPENROUTER_API_KEY."
         },
-        "aiCommitPromptHelper.huggingFaceApiKey": {
+        "codexCommitWidget.huggingFaceApiKey": {
           "type": "string",
           "default": "",
           "description": "Legacy Hugging Face token setting. Prefer the setup panel, which stores keys in VS Code SecretStorage. Falls back to HF_TOKEN or HUGGINGFACE_API_KEY."
         },
-        "aiCommitPromptHelper.customOpenAiCompatibleBaseUrl": {
+        "codexCommitWidget.customOpenAiCompatibleBaseUrl": {
           "type": "string",
           "default": "",
           "description": "Base URL for a custom OpenAI-compatible provider, for example https://api.example.com/v1."
         },
-        "aiCommitPromptHelper.customOpenAiCompatibleApiKey": {
+        "codexCommitWidget.customOpenAiCompatibleApiKey": {
           "type": "string",
           "default": "",
           "description": "API key for the custom OpenAI-compatible provider. Falls back to OPENAI_COMPATIBLE_API_KEY."
         },
-        "aiCommitPromptHelper.trackTokenUsageAnalytics": {
+        "codexCommitWidget.trackTokenUsageAnalytics": {
           "type": "boolean",
           "default": true,
           "description": "Track token usage analytics for commit generations."
         },
-        "aiCommitPromptHelper.analyticsRetentionDays": {
+        "codexCommitWidget.analyticsRetentionDays": {
           "type": "number",
           "default": 7,
           "minimum": 1,
           "maximum": 30,
           "description": "Retention window for token analytics. Entries older than this are auto-cleared."
         },
-        "aiCommitPromptHelper.analyticsSummary": {
+        "codexCommitWidget.analyticsSummary": {
           "type": "string",
           "default": "No tracked generations yet.",
           "description": "Auto-managed analytics summary for recent token usage."
         },
-        "aiCommitPromptHelper.analyticsTotalTokens": {
+        "codexCommitWidget.analyticsTotalTokens": {
           "type": "number",
           "default": 0,
           "description": "Auto-managed total tokens in the analytics retention window."
         },
-        "aiCommitPromptHelper.analyticsInputTokens": {
+        "codexCommitWidget.analyticsInputTokens": {
           "type": "number",
           "default": 0,
           "description": "Auto-managed input tokens in the analytics retention window."
         },
-        "aiCommitPromptHelper.analyticsOutputTokens": {
+        "codexCommitWidget.analyticsOutputTokens": {
           "type": "number",
           "default": 0,
           "description": "Auto-managed output tokens in the analytics retention window."
         },
-        "aiCommitPromptHelper.analyticsGenerations": {
+        "codexCommitWidget.analyticsGenerations": {
           "type": "number",
           "default": 0,
           "description": "Auto-managed generation count in the analytics retention window."
         },
-        "aiCommitPromptHelper.analyticsEstimatedRuns": {
+        "codexCommitWidget.analyticsEstimatedRuns": {
           "type": "number",
           "default": 0,
           "description": "Auto-managed count of runs where usage was estimated."
         },
-        "aiCommitPromptHelper.analyticsLastUpdated": {
+        "codexCommitWidget.analyticsLastUpdated": {
           "type": "string",
           "default": "never",
           "description": "Auto-managed timestamp of the last analytics refresh (UTC ISO-8601)."

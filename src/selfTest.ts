@@ -14,14 +14,62 @@ function readJsonFile<T>(relativePath: string): T {
 }
 
 function testPackageIdentityMatchesMarketplaceExtensionPath(): void {
-  const packageManifest = readJsonFile<{ name: string }>("package.json");
-  const packageLock = readJsonFile<{ name: string; packages: Record<string, { name?: string }> }>(
+  const packageManifest = readJsonFile<{ name: string; version: string }>("package.json");
+  const packageLock = readJsonFile<{
+    name: string;
+    version: string;
+    packages: Record<string, { name?: string; version?: string }>;
+  }>(
     "package-lock.json"
   );
 
   assert.equal(packageManifest.name, "codex-commit-widget");
   assert.equal(packageLock.name, "codex-commit-widget");
   assert.equal(packageLock.packages[""].name, "codex-commit-widget");
+  assert.equal(packageManifest.version, packageLock.version);
+  assert.equal(packageManifest.version, packageLock.packages[""].version);
+}
+
+function testPackageContributionIdsUseExtensionNamespace(): void {
+  const packageManifest = readJsonFile<{
+    activationEvents?: string[];
+    contributes: {
+      commands: Array<{ command: string }>;
+      configuration: { properties: Record<string, unknown> };
+      views: Record<string, Array<{ id: string; icon?: string; when?: string }>>;
+      viewsContainers: { activitybar: Array<{ id: string }> };
+      menus: Record<string, Array<{ command: string }>>;
+    };
+  }>("package.json");
+
+  const serializedContributions = JSON.stringify(packageManifest.contributes);
+
+  assert.ok(
+    !serializedContributions.includes("aiCommitPromptHelper"),
+    "package contributions must not use IDs owned by the retired ai-commit-prompt-helper extension"
+  );
+  assert.ok(
+    packageManifest.contributes.commands.every(({ command }) =>
+      command.startsWith("codexCommitWidget.")
+    )
+  );
+  assert.ok(
+    Object.keys(packageManifest.contributes.configuration.properties).every((key) =>
+      key.startsWith("codexCommitWidget.")
+    )
+  );
+  assert.ok(
+    Object.values(packageManifest.contributes.views)
+      .flat()
+      .every((view) => Boolean(view.icon)),
+    "contributed views must include icons for VS Code manifest validation"
+  );
+  assert.ok(
+    (packageManifest.activationEvents ?? []).every(
+      (event) => !event.startsWith("onCommand:") && !event.startsWith("onView:")
+    ),
+    "VS Code generates command and view activation events from package contributions"
+  );
 }
 
 function testHuggingFaceProviderMetadata(): void {
@@ -83,6 +131,7 @@ function testApiKeyResolutionPrefersSecretsBeforeLegacyAndEnvironment(): void {
 }
 
 testPackageIdentityMatchesMarketplaceExtensionPath();
+testPackageContributionIdsUseExtensionNamespace();
 testHuggingFaceProviderMetadata();
 testOpenRouterLowCostPresets();
 testApiKeyResolutionPrefersSecretsBeforeLegacyAndEnvironment();

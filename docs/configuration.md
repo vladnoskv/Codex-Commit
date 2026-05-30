@@ -2,7 +2,7 @@
 
 This document shows practical `settings.json` examples for **AI Commit & Prompt Helper**.
 
-Applies to extension release: `v2.0.2`.
+Applies to extension release: `v2.0.3`.
 
 ## Visual Preview
 
@@ -24,11 +24,11 @@ in `settings.json` still work as migration fallbacks.
 
 ```json
 {
-  "aiCommitPromptHelper.provider": "codexCli",
-  "aiCommitPromptHelper.codexCommand": "codex",
-  "aiCommitPromptHelper.model": "",
-  "aiCommitPromptHelper.reasoningEffort": "low",
-  "aiCommitPromptHelper.enableSidebarAction": true
+  "codexCommitWidget.provider": "codexCli",
+  "codexCommitWidget.codexCommand": "codex",
+  "codexCommitWidget.model": "",
+  "codexCommitWidget.reasoningEffort": "low",
+  "codexCommitWidget.enableSidebarAction": true
 }
 ```
 
@@ -40,9 +40,9 @@ OpenAI:
 
 ```json
 {
-  "aiCommitPromptHelper.provider": "openai",
-  "aiCommitPromptHelper.model": "gpt-5.4-mini",
-  "aiCommitPromptHelper.openAiApiKey": ""
+  "codexCommitWidget.provider": "openai",
+  "codexCommitWidget.model": "gpt-5.4-mini",
+  "codexCommitWidget.openAiApiKey": ""
 }
 ```
 
@@ -50,9 +50,9 @@ DeepSeek:
 
 ```json
 {
-  "aiCommitPromptHelper.provider": "deepseek",
-  "aiCommitPromptHelper.model": "deepseek-v4-flash",
-  "aiCommitPromptHelper.deepSeekApiKey": ""
+  "codexCommitWidget.provider": "deepseek",
+  "codexCommitWidget.model": "deepseek-v4-flash",
+  "codexCommitWidget.deepSeekApiKey": ""
 }
 ```
 
@@ -60,9 +60,9 @@ Anthropic Claude:
 
 ```json
 {
-  "aiCommitPromptHelper.provider": "anthropic",
-  "aiCommitPromptHelper.model": "claude-opus-4-1-20250805",
-  "aiCommitPromptHelper.anthropicApiKey": ""
+  "codexCommitWidget.provider": "anthropic",
+  "codexCommitWidget.model": "claude-opus-4-1-20250805",
+  "codexCommitWidget.anthropicApiKey": ""
 }
 ```
 
@@ -70,9 +70,9 @@ Google Gemini:
 
 ```json
 {
-  "aiCommitPromptHelper.provider": "gemini",
-  "aiCommitPromptHelper.model": "gemini-2.5-flash",
-  "aiCommitPromptHelper.geminiApiKey": ""
+  "codexCommitWidget.provider": "gemini",
+  "codexCommitWidget.model": "gemini-2.5-flash",
+  "codexCommitWidget.geminiApiKey": ""
 }
 ```
 
@@ -80,42 +80,42 @@ Mistral, Cohere, OpenRouter, Hugging Face, and custom OpenAI-compatible endpoint
 
 ```json
 {
-  "aiCommitPromptHelper.provider": "mistral",
-  "aiCommitPromptHelper.model": "mistral-small-latest",
-  "aiCommitPromptHelper.mistralApiKey": ""
+  "codexCommitWidget.provider": "mistral",
+  "codexCommitWidget.model": "mistral-small-latest",
+  "codexCommitWidget.mistralApiKey": ""
 }
 ```
 
 ```json
 {
-  "aiCommitPromptHelper.provider": "cohere",
-  "aiCommitPromptHelper.model": "command-a-03-2025",
-  "aiCommitPromptHelper.cohereApiKey": ""
+  "codexCommitWidget.provider": "cohere",
+  "codexCommitWidget.model": "command-a-03-2025",
+  "codexCommitWidget.cohereApiKey": ""
 }
 ```
 
 ```json
 {
-  "aiCommitPromptHelper.provider": "openrouter",
-  "aiCommitPromptHelper.model": "openai/gpt-5.2-mini",
-  "aiCommitPromptHelper.openRouterApiKey": ""
+  "codexCommitWidget.provider": "openrouter",
+  "codexCommitWidget.model": "openai/gpt-5.2-mini",
+  "codexCommitWidget.openRouterApiKey": ""
 }
 ```
 
 ```json
 {
-  "aiCommitPromptHelper.provider": "huggingface",
-  "aiCommitPromptHelper.model": "openai/gpt-oss-20b:cheapest",
-  "aiCommitPromptHelper.huggingFaceApiKey": ""
+  "codexCommitWidget.provider": "huggingface",
+  "codexCommitWidget.model": "openai/gpt-oss-20b:cheapest",
+  "codexCommitWidget.huggingFaceApiKey": ""
 }
 ```
 
 ```json
 {
-  "aiCommitPromptHelper.provider": "customOpenAiCompatible",
-  "aiCommitPromptHelper.customOpenAiCompatibleBaseUrl": "https://api.example.com/v1",
-  "aiCommitPromptHelper.model": "provider-model-id",
-  "aiCommitPromptHelper.customOpenAiCompatibleApiKey": ""
+  "codexCommitWidget.provider": "customOpenAiCompatible",
+  "codexCommitWidget.customOpenAiCompatibleBaseUrl": "https://api.example.com/v1",
+  "codexCommitWidget.model": "provider-model-id",
+  "codexCommitWidget.customOpenAiCompatibleApiKey": ""
 }
 ```
 
@@ -149,8 +149,8 @@ If Codex CLI is installed globally but not detected in VS Code:
 
 ```json
 {
-  "aiCommitPromptHelper.promptTemplate": "You are generating a git commit message from staged changes. Return only the commit message. Use conventional commits and include a short risk audit.",
-  "aiCommitPromptHelper.additionalPromptInstructions": "Prefer imperative verbs in subject lines. Mention migrations explicitly if present. Keep sections concise."
+  "codexCommitWidget.promptTemplate": "You are generating a git commit message from staged changes. Return only the commit message. Use conventional commits and include a short risk audit.",
+  "codexCommitWidget.additionalPromptInstructions": "Prefer imperative verbs in subject lines. Mention migrations explicitly if present. Keep sections concise."
 }
 ```
 
@@ -168,9 +168,9 @@ Use these only when you want explicit control over style variability and respons
 
 ```json
 {
-  "aiCommitPromptHelper.temperatureOverride": 0.2,
-  "aiCommitPromptHelper.topPOverride": 0.95,
-  "aiCommitPromptHelper.maxOutputTokensOverride": 500
+  "codexCommitWidget.temperatureOverride": 0.2,
+  "codexCommitWidget.topPOverride": 0.95,
+  "codexCommitWidget.maxOutputTokensOverride": 500
 }
 ```
 
@@ -180,22 +180,22 @@ Set each value to `null` to let provider defaults apply.
 
 ```json
 {
-  "aiCommitPromptHelper.trackTokenUsageAnalytics": true,
-  "aiCommitPromptHelper.analyticsRetentionDays": 7
+  "codexCommitWidget.trackTokenUsageAnalytics": true,
+  "codexCommitWidget.analyticsRetentionDays": 7
 }
 ```
 
 The extension auto-populates these settings from tracked runs:
 
-- `aiCommitPromptHelper.analyticsSummary`
-- `aiCommitPromptHelper.analyticsTotalTokens`
-- `aiCommitPromptHelper.analyticsInputTokens`
-- `aiCommitPromptHelper.analyticsOutputTokens`
-- `aiCommitPromptHelper.analyticsGenerations`
-- `aiCommitPromptHelper.analyticsEstimatedRuns`
-- `aiCommitPromptHelper.analyticsLastUpdated`
+- `codexCommitWidget.analyticsSummary`
+- `codexCommitWidget.analyticsTotalTokens`
+- `codexCommitWidget.analyticsInputTokens`
+- `codexCommitWidget.analyticsOutputTokens`
+- `codexCommitWidget.analyticsGenerations`
+- `codexCommitWidget.analyticsEstimatedRuns`
+- `codexCommitWidget.analyticsLastUpdated`
 
 ## Migration From v1
 
-New settings use `aiCommitPromptHelper.*`. Existing `codexCommitWidget.*` values are read
-as fallbacks, but update your settings to the new namespace when practical.
+New settings use `codexCommitWidget.*`. Existing `aiCommitPromptHelper.*` values are read
+as fallbacks, but update your settings to the public extension namespace when practical.

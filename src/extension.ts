@@ -89,33 +89,33 @@ type TokenUsageEntry = {
   estimated: boolean;
 };
 
-const CONFIG_SECTION = "aiCommitPromptHelper";
-const LEGACY_CONFIG_SECTION = "codexCommitWidget";
-const COMMAND_ID = "aiCommitPromptHelper.generateCommitMessage";
-const IMPROVE_PROMPT_COMMAND_ID = "aiCommitPromptHelper.improvePrompt";
-const SETUP_CODEX_COMMAND_ID = "aiCommitPromptHelper.setupCodexCli";
-const OPEN_SETTINGS_COMMAND_ID = "aiCommitPromptHelper.openSettings";
-const LEGACY_COMMAND_ID = "codexCommitWidget.generateCommitMessage";
-const LEGACY_IMPROVE_PROMPT_COMMAND_ID = "codexCommitWidget.improvePrompt";
-const LEGACY_SETUP_CODEX_COMMAND_ID = "codexCommitWidget.setupCodexCli";
-const LEGACY_OPEN_SETTINGS_COMMAND_ID = "codexCommitWidget.openSettings";
-const SIDEBAR_VIEW_ID = "aiCommitPromptHelper.sidebar";
-const SIDEBAR_ENABLED_CONTEXT_KEY = "aiCommitPromptHelper.sidebarEnabled";
+const CONFIG_SECTION = "codexCommitWidget";
+const LEGACY_CONFIG_SECTION = "aiCommitPromptHelper";
+const COMMAND_ID = "codexCommitWidget.generateCommitMessage";
+const IMPROVE_PROMPT_COMMAND_ID = "codexCommitWidget.improvePrompt";
+const SETUP_CODEX_COMMAND_ID = "codexCommitWidget.setupCodexCli";
+const OPEN_SETTINGS_COMMAND_ID = "codexCommitWidget.openSettings";
+const LEGACY_COMMAND_ID = "aiCommitPromptHelper.generateCommitMessage";
+const LEGACY_IMPROVE_PROMPT_COMMAND_ID = "aiCommitPromptHelper.improvePrompt";
+const LEGACY_SETUP_CODEX_COMMAND_ID = "aiCommitPromptHelper.setupCodexCli";
+const LEGACY_OPEN_SETTINGS_COMMAND_ID = "aiCommitPromptHelper.openSettings";
+const SIDEBAR_VIEW_ID = "codexCommitWidget.sidebar";
+const SIDEBAR_ENABLED_CONTEXT_KEY = "codexCommitWidget.sidebarEnabled";
 const MIN_RECOMMENDED_CODEX_VERSION = "0.120.0";
 const DEFAULT_PROMPT_TEMPLATE =
   "You are generating a git commit message from staged changes. Return only the final commit message text: no preface, no code fences, no markdown wrapper, no explanations outside the commit message. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts directly supported by the staged diff. If validation is not shown in the diff, say not run or not shown rather than inventing it.";
 const DEFAULT_STATUS_BAR_TEXT = "$(sparkle) AI Commit";
 const BASE_TOOLTIP = "Generate a commit message from staged changes using the selected AI provider";
 const IMPROVE_PROMPT_TOOLTIP = "Improve selected prompt text using the selected AI provider";
-const TOKEN_USAGE_STATE_KEY = "aiCommitPromptHelper.tokenUsageHistory.v1";
-const LEGACY_TOKEN_USAGE_STATE_KEY = "codexCommitWidget.tokenUsageHistory.v1";
+const TOKEN_USAGE_STATE_KEY = "codexCommitWidget.tokenUsageHistory.v1";
+const LEGACY_TOKEN_USAGE_STATE_KEY = "aiCommitPromptHelper.tokenUsageHistory.v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_ANALYTICS_RETENTION_DAYS = 7;
 let hasShownOutdatedCodexVersionWarning = false;
 let hasCheckedCodexCliVersion = false;
 let settingsPanel: vscode.WebviewPanel | null = null;
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
   const statusBar = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
     100
@@ -138,17 +138,8 @@ export function activate(context: vscode.ExtensionContext) {
   const commandDisposable = vscode.commands.registerCommand(COMMAND_ID, async () => {
     await generateCommitMessage(context, statusBar);
   });
-  const legacyCommandDisposable = vscode.commands.registerCommand(LEGACY_COMMAND_ID, async () => {
-    await generateCommitMessage(context, statusBar);
-  });
   const improvePromptCommandDisposable = vscode.commands.registerCommand(
     IMPROVE_PROMPT_COMMAND_ID,
-    async () => {
-      await improvePrompt(context);
-    }
-  );
-  const legacyImprovePromptCommandDisposable = vscode.commands.registerCommand(
-    LEGACY_IMPROVE_PROMPT_COMMAND_ID,
     async () => {
       await improvePrompt(context);
     }
@@ -159,24 +150,38 @@ export function activate(context: vscode.ExtensionContext) {
       await setupCodexCliCommand(context);
     }
   );
-  const legacySetupCommandDisposable = vscode.commands.registerCommand(
-    LEGACY_SETUP_CODEX_COMMAND_ID,
-    async () => {
-      await setupCodexCliCommand(context);
-    }
-  );
   const openSettingsCommandDisposable = vscode.commands.registerCommand(
     OPEN_SETTINGS_COMMAND_ID,
     async () => {
       await openCodexWidgetSettings(context);
     }
   );
-  const legacyOpenSettingsCommandDisposable = vscode.commands.registerCommand(
-    LEGACY_OPEN_SETTINGS_COMMAND_ID,
-    async () => {
-      await openCodexWidgetSettings(context);
+  const legacyCommandDisposables = await registerLegacyCommandAliases([
+    {
+      command: LEGACY_COMMAND_ID,
+      callback: async () => {
+        await generateCommitMessage(context, statusBar);
+      }
+    },
+    {
+      command: LEGACY_IMPROVE_PROMPT_COMMAND_ID,
+      callback: async () => {
+        await improvePrompt(context);
+      }
+    },
+    {
+      command: LEGACY_SETUP_CODEX_COMMAND_ID,
+      callback: async () => {
+        await setupCodexCliCommand(context);
+      }
+    },
+    {
+      command: LEGACY_OPEN_SETTINGS_COMMAND_ID,
+      callback: async () => {
+        await openCodexWidgetSettings(context);
+      }
     }
-  );
+  ]);
 
   const configChangeDisposable = vscode.workspace.onDidChangeConfiguration((event) => {
     if (
@@ -195,19 +200,41 @@ export function activate(context: vscode.ExtensionContext) {
     statusBar,
     sidebarView,
     commandDisposable,
-    legacyCommandDisposable,
     improvePromptCommandDisposable,
-    legacyImprovePromptCommandDisposable,
     setupCommandDisposable,
-    legacySetupCommandDisposable,
     openSettingsCommandDisposable,
-    legacyOpenSettingsCommandDisposable,
+    ...legacyCommandDisposables,
     configChangeDisposable
   );
 }
 
 export function deactivate() {
   // no-op
+}
+
+async function registerLegacyCommandAliases(
+  registrations: Array<{ command: string; callback: () => Promise<void> }>
+): Promise<vscode.Disposable[]> {
+  const registeredCommands = new Set(await vscode.commands.getCommands(true));
+
+  return registrations.flatMap(({ command, callback }) => {
+    if (registeredCommands.has(command)) {
+      return [];
+    }
+
+    try {
+      return [vscode.commands.registerCommand(command, callback)];
+    } catch (error: unknown) {
+      if (isAlreadyRegisteredCommandError(error)) {
+        return [];
+      }
+      throw error;
+    }
+  });
+}
+
+function isAlreadyRegisteredCommandError(error: unknown): boolean {
+  return error instanceof Error && /command .* already registered/i.test(error.message);
 }
 
 class SidebarActionProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
@@ -266,7 +293,7 @@ async function setupCodexCliCommand(context: vscode.ExtensionContext): Promise<v
   if (!discovered) {
     const openSettingsAction = "Open Settings";
     const selected = await vscode.window.showErrorMessage(
-      "Codex CLI could not be auto-detected. Install Codex globally (`npm install -g @openai/codex@latest`) or set `aiCommitPromptHelper.codexCommand` manually.",
+      "Codex CLI could not be auto-detected. Install Codex globally (`npm install -g @openai/codex@latest`) or set `codexCommitWidget.codexCommand` manually.",
       openSettingsAction
     );
     if (selected === openSettingsAction) {
@@ -296,7 +323,7 @@ async function openProviderModeSettingsPanel(context: vscode.ExtensionContext): 
   }
 
   const panel = vscode.window.createWebviewPanel(
-    "aiCommitPromptHelper.settings",
+    "codexCommitWidget.settings",
     "AI Helper Settings",
     vscode.ViewColumn.Active,
     {
@@ -1995,7 +2022,7 @@ function createOpenAiCompatibleClient(
           : defaultBaseUrl;
       if (!baseUrl) {
         throw new Error(
-          "Set aiCommitPromptHelper.customOpenAiCompatibleBaseUrl before using the custom OpenAI-compatible provider."
+          "Set codexCommitWidget.customOpenAiCompatibleBaseUrl before using the custom OpenAI-compatible provider."
         );
       }
 
@@ -2251,23 +2278,23 @@ function getApiKey(settings: GenerationSettings, provider: GenerationProvider): 
 function getMissingApiKeyMessage(provider: GenerationProvider): string {
   switch (provider) {
     case "openai":
-      return "Set aiCommitPromptHelper.openAiApiKey or OPENAI_API_KEY before using OpenAI.";
+      return "Set codexCommitWidget.openAiApiKey or OPENAI_API_KEY before using OpenAI.";
     case "deepseek":
-      return "Set aiCommitPromptHelper.deepSeekApiKey or DEEPSEEK_API_KEY before using DeepSeek.";
+      return "Set codexCommitWidget.deepSeekApiKey or DEEPSEEK_API_KEY before using DeepSeek.";
     case "anthropic":
-      return "Set aiCommitPromptHelper.anthropicApiKey or ANTHROPIC_API_KEY before using Anthropic Claude.";
+      return "Set codexCommitWidget.anthropicApiKey or ANTHROPIC_API_KEY before using Anthropic Claude.";
     case "cohere":
-      return "Set aiCommitPromptHelper.cohereApiKey or COHERE_API_KEY before using Cohere.";
+      return "Set codexCommitWidget.cohereApiKey or COHERE_API_KEY before using Cohere.";
     case "gemini":
-      return "Set aiCommitPromptHelper.geminiApiKey, GEMINI_API_KEY, or GOOGLE_API_KEY before using Google Gemini.";
+      return "Set codexCommitWidget.geminiApiKey, GEMINI_API_KEY, or GOOGLE_API_KEY before using Google Gemini.";
     case "mistral":
-      return "Set aiCommitPromptHelper.mistralApiKey or MISTRAL_API_KEY before using Mistral.";
+      return "Set codexCommitWidget.mistralApiKey or MISTRAL_API_KEY before using Mistral.";
     case "openrouter":
-      return "Set aiCommitPromptHelper.openRouterApiKey or OPENROUTER_API_KEY before using OpenRouter.";
+      return "Set codexCommitWidget.openRouterApiKey or OPENROUTER_API_KEY before using OpenRouter.";
     case "huggingface":
-      return "Set aiCommitPromptHelper.huggingFaceApiKey, HF_TOKEN, or HUGGINGFACE_API_KEY before using Hugging Face.";
+      return "Set codexCommitWidget.huggingFaceApiKey, HF_TOKEN, or HUGGINGFACE_API_KEY before using Hugging Face.";
     case "customOpenAiCompatible":
-      return "Set aiCommitPromptHelper.customOpenAiCompatibleApiKey or OPENAI_COMPATIBLE_API_KEY before using the custom OpenAI-compatible provider.";
+      return "Set codexCommitWidget.customOpenAiCompatibleApiKey or OPENAI_COMPATIBLE_API_KEY before using the custom OpenAI-compatible provider.";
     case "codexCli":
     case "codexExtensionThenCli":
       return "No API key is required for Codex CLI providers.";
@@ -2798,9 +2825,9 @@ async function runCodexCli(
       `Tried: ${attempted}\n\n` +
       "Fix one of these:\n" +
       "1) Install Codex CLI and ensure VS Code can access it in PATH.\n" +
-      "2) Set `aiCommitPromptHelper.codexCommand` to the full executable path (for Windows, commonly `%APPDATA%\\\\npm\\\\codex.cmd`).\n" +
+      "2) Set `codexCommitWidget.codexCommand` to the full executable path (for Windows, commonly `%APPDATA%\\\\npm\\\\codex.cmd`).\n" +
       "3) Run `AI Helper: Setup Codex CLI` from the Command Palette (or sidebar).\n" +
-      "4) Use extension mode by setting `aiCommitPromptHelper.provider` to `codexExtensionThenCli` and configuring `aiCommitPromptHelper.codexExtensionCommand`.\n\n" +
+      "4) Use extension mode by setting `codexCommitWidget.provider` to `codexExtensionThenCli` and configuring `codexCommitWidget.codexExtensionCommand`.\n\n" +
       enoentMessage
   );
 }
@@ -2868,7 +2895,7 @@ function getAuthRequiredMessage(
 
   return (
     "You must be logged into a Codex auth session to use commit generation.\n" +
-    "Run `codex login` in a terminal, then try again. If you have multiple Codex installs, set `aiCommitPromptHelper.codexCommand` to the exact binary you logged into." +
+    "Run `codex login` in a terminal, then try again. If you have multiple Codex installs, set `codexCommitWidget.codexCommand` to the exact binary you logged into." +
     triedSuffix +
     detailsSuffix
   );
