@@ -5,6 +5,17 @@ import { readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
+import {
+  GENERIC_API_KEY_SECRET_KEY,
+  PROVIDER_MODE_DEFINITIONS,
+  type GenerationProvider,
+  type ProviderModeDefinition,
+  type ReasoningEffort,
+  getDefaultModelForProvider,
+  getProviderLabel,
+  normalizeGenerationProvider,
+  resolveApiKeyValue
+} from "./providers";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,25 +29,13 @@ type PromptImprovementSource = {
   selection: vscode.Selection | null;
 };
 
-type GenerationProvider =
-  | "codexCli"
-  | "codexExtensionThenCli"
-  | "openai"
-  | "deepseek"
-  | "anthropic"
-  | "cohere"
-  | "gemini"
-  | "mistral"
-  | "openrouter"
-  | "customOpenAiCompatible";
-type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
-
 type GenerationSettings = {
   provider: GenerationProvider;
   codexExtensionCommand: string;
   codexCommand: string;
   model: string;
   apiKey: string;
+  legacyApiKey: string;
   openAiApiKey: string;
   deepSeekApiKey: string;
   anthropicApiKey: string;
@@ -44,6 +43,7 @@ type GenerationSettings = {
   geminiApiKey: string;
   mistralApiKey: string;
   openRouterApiKey: string;
+  huggingFaceApiKey: string;
   customOpenAiCompatibleBaseUrl: string;
   customOpenAiCompatibleApiKey: string;
   reasoningEffort: ReasoningEffort;
@@ -101,10 +101,9 @@ const LEGACY_SETUP_CODEX_COMMAND_ID = "codexCommitWidget.setupCodexCli";
 const LEGACY_OPEN_SETTINGS_COMMAND_ID = "codexCommitWidget.openSettings";
 const SIDEBAR_VIEW_ID = "aiCommitPromptHelper.sidebar";
 const SIDEBAR_ENABLED_CONTEXT_KEY = "aiCommitPromptHelper.sidebarEnabled";
-const DEFAULT_MODEL = "gpt-5.4-mini";
 const MIN_RECOMMENDED_CODEX_VERSION = "0.120.0";
 const DEFAULT_PROMPT_TEMPLATE =
-  "You are generating a git commit message from staged changes. Return only the final commit message, no code fences, no explanations. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts supported by the diff.";
+  "You are generating a git commit message from staged changes. Return only the final commit message text: no preface, no code fences, no markdown wrapper, no explanations outside the commit message. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts directly supported by the staged diff. If validation is not shown in the diff, say not run or not shown rather than inventing it.";
 const DEFAULT_STATUS_BAR_TEXT = "$(sparkle) AI Commit";
 const BASE_TOOLTIP = "Generate a commit message from staged changes using the selected AI provider";
 const IMPROVE_PROMPT_TOOLTIP = "Improve selected prompt text using the selected AI provider";
@@ -114,6 +113,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_ANALYTICS_RETENTION_DAYS = 7;
 let hasShownOutdatedCodexVersionWarning = false;
 let hasCheckedCodexCliVersion = false;
+let settingsPanel: vscode.WebviewPanel | null = null;
 
 export function activate(context: vscode.ExtensionContext) {
   const statusBar = vscode.window.createStatusBarItem(
@@ -144,37 +144,37 @@ export function activate(context: vscode.ExtensionContext) {
   const improvePromptCommandDisposable = vscode.commands.registerCommand(
     IMPROVE_PROMPT_COMMAND_ID,
     async () => {
-      await improvePrompt();
+      await improvePrompt(context);
     }
   );
   const legacyImprovePromptCommandDisposable = vscode.commands.registerCommand(
     LEGACY_IMPROVE_PROMPT_COMMAND_ID,
     async () => {
-      await improvePrompt();
+      await improvePrompt(context);
     }
   );
   const setupCommandDisposable = vscode.commands.registerCommand(
     SETUP_CODEX_COMMAND_ID,
     async () => {
-      await setupCodexCliCommand();
+      await setupCodexCliCommand(context);
     }
   );
   const legacySetupCommandDisposable = vscode.commands.registerCommand(
     LEGACY_SETUP_CODEX_COMMAND_ID,
     async () => {
-      await setupCodexCliCommand();
+      await setupCodexCliCommand(context);
     }
   );
   const openSettingsCommandDisposable = vscode.commands.registerCommand(
     OPEN_SETTINGS_COMMAND_ID,
     async () => {
-      await openCodexWidgetSettings();
+      await openCodexWidgetSettings(context);
     }
   );
   const legacyOpenSettingsCommandDisposable = vscode.commands.registerCommand(
     LEGACY_OPEN_SETTINGS_COMMAND_ID,
     async () => {
-      await openCodexWidgetSettings();
+      await openCodexWidgetSettings(context);
     }
   );
 
@@ -258,7 +258,7 @@ class SidebarActionProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
   }
 }
 
-async function setupCodexCliCommand(): Promise<void> {
+async function setupCodexCliCommand(context: vscode.ExtensionContext): Promise<void> {
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
   const configuredCommand = getConfiguredValue<string>("codexCommand", "codex");
 
@@ -270,7 +270,7 @@ async function setupCodexCliCommand(): Promise<void> {
       openSettingsAction
     );
     if (selected === openSettingsAction) {
-      await openCodexWidgetSettings();
+      await openCodexWidgetSettings(context);
     }
     return;
   }
@@ -281,11 +281,933 @@ async function setupCodexCliCommand(): Promise<void> {
   );
 }
 
-async function openCodexWidgetSettings(): Promise<void> {
-  await vscode.commands.executeCommand(
-    "workbench.action.openSettings",
-    CONFIG_SECTION
+async function openCodexWidgetSettings(context: vscode.ExtensionContext): Promise<void> {
+  await openProviderModeSettingsPanel(context);
+}
+
+async function openProviderModeSettingsPanel(context: vscode.ExtensionContext): Promise<void> {
+  if (settingsPanel) {
+    settingsPanel.reveal(vscode.ViewColumn.Active);
+    settingsPanel.webview.postMessage({
+      type: "state",
+      state: await readSettingsPanelState(context.secrets)
+    });
+    return;
+  }
+
+  const panel = vscode.window.createWebviewPanel(
+    "aiCommitPromptHelper.settings",
+    "AI Helper Settings",
+    vscode.ViewColumn.Active,
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true
+    }
   );
+  settingsPanel = panel;
+  panel.webview.html = renderSettingsPanelHtml(panel.webview);
+  panel.webview.onDidReceiveMessage(
+    async (message: unknown) => {
+      try {
+        await handleSettingsPanelMessage(message, panel, context);
+      } catch (error: unknown) {
+        const messageText =
+          error instanceof Error ? error.message : "Unknown error while saving settings.";
+        void vscode.window.showErrorMessage(messageText);
+        await panel.webview.postMessage({ type: "error", message: messageText });
+      }
+    },
+    undefined,
+    context.subscriptions
+  );
+  panel.onDidDispose(
+    () => {
+      settingsPanel = null;
+    },
+    undefined,
+    context.subscriptions
+  );
+}
+
+async function readSettingsPanelState(
+  secrets: vscode.SecretStorage
+): Promise<Record<string, unknown>> {
+  const provider = normalizeGenerationProvider(
+    getConfiguredValue<string>("provider", "codexCli")
+  );
+  const providerApiKeysConfigured: Record<string, boolean> = {};
+  for (const mode of Object.values(PROVIDER_MODE_DEFINITIONS)) {
+    if (mode.apiKeySetting) {
+      providerApiKeysConfigured[mode.provider] = await hasProviderApiKeyConfigured(secrets, mode);
+    }
+  }
+
+  return {
+    provider,
+    codexCommand: getConfiguredValue<string>("codexCommand", "codex"),
+    codexExtensionCommand: getConfiguredValue<string>("codexExtensionCommand", ""),
+    model: getConfiguredValue<string>("model", ""),
+    apiKey: "",
+    apiKeyConfigured: await hasGenericApiKeyConfigured(secrets),
+    apiKeys: {},
+    providerApiKeysConfigured,
+    customOpenAiCompatibleBaseUrl: getConfiguredValue<string>(
+      "customOpenAiCompatibleBaseUrl",
+      ""
+    ),
+    reasoningEffort: normalizeReasoningEffort(getConfiguredValue<string>("reasoningEffort", "low")),
+    maxDiffChars: normalizePositiveInteger(getConfiguredValue<number>("maxDiffChars", 120000), 120000),
+    promptTemplate: getConfiguredValue<string>("promptTemplate", DEFAULT_PROMPT_TEMPLATE),
+    additionalPromptInstructions: getConfiguredValue<string>("additionalPromptInstructions", ""),
+    temperatureOverride: getConfiguredValue<number | null>("temperatureOverride", null),
+    topPOverride: getConfiguredValue<number | null>("topPOverride", null),
+    maxOutputTokensOverride: getConfiguredValue<number | null>("maxOutputTokensOverride", null),
+    trackTokenUsageAnalytics: getConfiguredValue<boolean>("trackTokenUsageAnalytics", true),
+    analyticsRetentionDays: getAnalyticsRetentionDays()
+  };
+}
+
+async function handleSettingsPanelMessage(
+  message: unknown,
+  panel: vscode.WebviewPanel,
+  context: vscode.ExtensionContext
+): Promise<void> {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+
+  const record = message as Record<string, unknown>;
+  if (record.type === "ready") {
+    await panel.webview.postMessage({
+      type: "state",
+      state: await readSettingsPanelState(context.secrets)
+    });
+    return;
+  }
+
+  if (record.type === "openNativeSettings") {
+    await vscode.commands.executeCommand("workbench.action.openSettings", CONFIG_SECTION);
+    return;
+  }
+
+  if (record.type !== "save" || !record.values || typeof record.values !== "object") {
+    return;
+  }
+
+  const values = record.values as Record<string, unknown>;
+  const provider = normalizeGenerationProvider(String(values.provider ?? "codexCli"));
+  const mode = PROVIDER_MODE_DEFINITIONS[provider];
+  const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+  const validationError = validateSettingsPanelValues(mode, values);
+  if (validationError) {
+    void vscode.window.showErrorMessage(validationError);
+    await panel.webview.postMessage({ type: "error", message: validationError });
+    return;
+  }
+
+  await updateSettingIfChanged(config, "provider", provider);
+  await updateSettingIfChanged(config, "model", asString(values.model));
+  await updateSettingIfChanged(config, "maxDiffChars", normalizePositiveInteger(asNumber(values.maxDiffChars), 120000));
+  await updateSettingIfChanged(config, "promptTemplate", asString(values.promptTemplate) || DEFAULT_PROMPT_TEMPLATE);
+  await updateSettingIfChanged(
+    config,
+    "additionalPromptInstructions",
+    asString(values.additionalPromptInstructions)
+  );
+  await updateSettingIfChanged(
+    config,
+    "trackTokenUsageAnalytics",
+    typeof values.trackTokenUsageAnalytics === "boolean"
+      ? values.trackTokenUsageAnalytics
+      : true
+  );
+  await updateSettingIfChanged(
+    config,
+    "analyticsRetentionDays",
+    normalizeNumberInRange(asNumber(values.analyticsRetentionDays), 1, 30) ?? DEFAULT_ANALYTICS_RETENTION_DAYS
+  );
+
+  if (mode.requiresCodexCommand) {
+    await updateSettingIfChanged(config, "codexCommand", asString(values.codexCommand) || "codex");
+  }
+  if (mode.requiresCodexExtensionCommand) {
+    await updateSettingIfChanged(
+      config,
+      "codexExtensionCommand",
+      asString(values.codexExtensionCommand)
+    );
+  }
+  if (mode.requiresCustomBaseUrl) {
+    await updateSettingIfChanged(
+      config,
+      "customOpenAiCompatibleBaseUrl",
+      asString(values.customOpenAiCompatibleBaseUrl)
+    );
+  }
+  if (mode.apiKeySetting) {
+    await storeSecretIfProvided(context.secrets, GENERIC_API_KEY_SECRET_KEY, asString(values.apiKey));
+    if (mode.secretKey) {
+      await storeSecretIfProvided(
+        context.secrets,
+        mode.secretKey,
+        asString(values.providerApiKey)
+      );
+    }
+  }
+  if (mode.supportsReasoningEffort) {
+    await updateSettingIfChanged(
+      config,
+      "reasoningEffort",
+      normalizeReasoningEffort(asString(values.reasoningEffort))
+    );
+  }
+  if (mode.supportsSamplingOverrides) {
+    await updateSettingIfChanged(
+      config,
+      "temperatureOverride",
+      nullableNumberInRange(values.temperatureOverride, 0, 2)
+    );
+    await updateSettingIfChanged(
+      config,
+      "topPOverride",
+      nullableNumberInRange(values.topPOverride, 0, 1)
+    );
+    await updateSettingIfChanged(
+      config,
+      "maxOutputTokensOverride",
+      nullablePositiveInteger(values.maxOutputTokensOverride)
+    );
+  }
+
+  void vscode.window.showInformationMessage("AI Helper settings saved.");
+  await panel.webview.postMessage({
+    type: "state",
+    state: await readSettingsPanelState(context.secrets)
+  });
+  await panel.webview.postMessage({ type: "saved" });
+}
+
+function validateSettingsPanelValues(
+  mode: ProviderModeDefinition,
+  values: Record<string, unknown>
+): string {
+  if (mode.requiresCustomBaseUrl && !asString(values.customOpenAiCompatibleBaseUrl)) {
+    return "Base URL is required for the custom OpenAI-compatible provider.";
+  }
+  if (mode.requiresCodexCommand && !asString(values.codexCommand)) {
+    return "Codex command is required for Codex modes.";
+  }
+  if (normalizePositiveInteger(asNumber(values.maxDiffChars), 0) <= 0) {
+    return "Max diff characters must be a positive number.";
+  }
+  const retentionDays = normalizeNumberInRange(asNumber(values.analyticsRetentionDays), 1, 30);
+  if (retentionDays === null) {
+    return "Analytics retention days must be between 1 and 30.";
+  }
+  if (
+    values.temperatureOverride !== null &&
+    values.temperatureOverride !== "" &&
+    nullableNumberInRange(values.temperatureOverride, 0, 2) === null
+  ) {
+    return "Temperature must be between 0 and 2.";
+  }
+  if (
+    values.topPOverride !== null &&
+    values.topPOverride !== "" &&
+    nullableNumberInRange(values.topPOverride, 0, 1) === null
+  ) {
+    return "Top P must be between 0 and 1.";
+  }
+  if (
+    values.maxOutputTokensOverride !== null &&
+    values.maxOutputTokensOverride !== "" &&
+    nullablePositiveInteger(values.maxOutputTokensOverride) === null
+  ) {
+    return "Max output tokens must be a positive whole number.";
+  }
+  return "";
+}
+
+async function updateSettingIfChanged(
+  config: vscode.WorkspaceConfiguration,
+  key: string,
+  value: string | number | boolean | null
+): Promise<void> {
+  const current = config.get<unknown>(key);
+  if (current === value) {
+    return;
+  }
+  await config.update(key, value, vscode.ConfigurationTarget.Global);
+}
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function asNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : Number.NaN;
+}
+
+function nullableNumberInRange(value: unknown, min: number, max: number): number | null {
+  if (value === null || value === "" || value === undefined) {
+    return null;
+  }
+  return normalizeNumberInRange(asNumber(value), min, max);
+}
+
+function nullablePositiveInteger(value: unknown): number | null {
+  if (value === null || value === "" || value === undefined) {
+    return null;
+  }
+  return normalizePositiveIntegerOrNull(asNumber(value));
+}
+
+async function getSecretValue(
+  secrets: vscode.SecretStorage,
+  key: string | null
+): Promise<string> {
+  if (!key) {
+    return "";
+  }
+  return (await secrets.get(key))?.trim() ?? "";
+}
+
+async function storeSecretIfProvided(
+  secrets: vscode.SecretStorage,
+  key: string,
+  value: string
+): Promise<void> {
+  if (!value) {
+    return;
+  }
+  await secrets.store(key, value);
+}
+
+async function hasGenericApiKeyConfigured(secrets: vscode.SecretStorage): Promise<boolean> {
+  return Boolean(
+    (await getSecretValue(secrets, GENERIC_API_KEY_SECRET_KEY)) ||
+      getConfiguredValue<string>("apiKey", "").trim()
+  );
+}
+
+async function hasProviderApiKeyConfigured(
+  secrets: vscode.SecretStorage,
+  mode: ProviderModeDefinition
+): Promise<boolean> {
+  return Boolean(
+    (await getSecretValue(secrets, mode.secretKey)) ||
+      (mode.apiKeySetting ? getConfiguredValue<string>(mode.apiKeySetting, "").trim() : "")
+  );
+}
+
+function renderSettingsPanelHtml(webview: vscode.Webview): string {
+  const nonce = createNonce();
+  const modes = Object.values(PROVIDER_MODE_DEFINITIONS);
+  const providerOptions = modes
+    .map((mode) => `<option value="${escapeHtml(mode.provider)}">${escapeHtml(mode.label)}</option>`)
+    .join("");
+  const modeData = safeJsonForScript(PROVIDER_MODE_DEFINITIONS);
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Helper Settings</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --border: var(--vscode-panel-border);
+      --muted: var(--vscode-descriptionForeground);
+      --focus: var(--vscode-focusBorder);
+      --input: var(--vscode-input-background);
+      --button: var(--vscode-button-background);
+      --button-text: var(--vscode-button-foreground);
+      --button-hover: var(--vscode-button-hoverBackground);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 20px;
+      color: var(--vscode-foreground);
+      background: var(--vscode-editor-background);
+      font: 13px/1.45 var(--vscode-font-family);
+    }
+    .shell {
+      width: min(980px, 100%);
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 360px) auto;
+      gap: 10px;
+      align-items: end;
+    }
+    button {
+      min-height: 30px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 10px;
+      color: var(--vscode-button-secondaryForeground);
+      background: var(--vscode-button-secondaryBackground);
+      cursor: pointer;
+      font: inherit;
+    }
+    .secondary:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+    .primary {
+      border-color: transparent;
+      color: var(--button-text);
+      background: var(--button);
+    }
+    .primary:hover { background: var(--button-hover); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    section {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      min-width: 0;
+    }
+    .wide { grid-column: 1 / -1; }
+    label {
+      display: grid;
+      gap: 5px;
+      margin-bottom: 10px;
+      min-width: 0;
+    }
+    label:last-child { margin-bottom: 0; }
+    .label-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .status {
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .status.error {
+      color: var(--vscode-errorForeground);
+    }
+    input,
+    select,
+    textarea {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--vscode-input-border, transparent);
+      border-radius: 4px;
+      padding: 6px 8px;
+      color: var(--vscode-input-foreground);
+      background: var(--input);
+      font: inherit;
+    }
+    textarea {
+      min-height: 92px;
+      resize: vertical;
+    }
+    input:focus,
+    select:focus,
+    textarea:focus,
+    button:focus {
+      outline: 1px solid var(--focus);
+      outline-offset: 1px;
+    }
+    .inline {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .inline input {
+      width: auto;
+    }
+    .secret-field {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 32px;
+      gap: 6px;
+    }
+    .icon-button {
+      width: 32px;
+      min-width: 32px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      line-height: 0;
+    }
+    .icon-button svg {
+      width: 16px;
+      height: 16px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .actions {
+      position: sticky;
+      bottom: 0;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 12px 0 0;
+      background: var(--vscode-editor-background);
+    }
+    .hidden { display: none; }
+    @media (max-width: 720px) {
+      body { padding: 14px; }
+      header,
+      .actions { flex-direction: column; align-items: stretch; }
+      .toolbar { grid-template-columns: 1fr; }
+      .grid { grid-template-columns: 1fr; }
+      button { width: 100%; }
+      .icon-button { width: 32px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <h1>AI Helper Settings</h1>
+        <div class="hint" id="modeSummary"></div>
+      </div>
+      <button class="secondary" type="button" id="nativeSettings">VS Code Settings</button>
+    </header>
+
+    <div class="toolbar">
+      <label>
+        <span>Provider mode</span>
+        <select id="providerSelect" name="provider">
+          ${providerOptions}
+        </select>
+      </label>
+    </div>
+
+    <form id="settingsForm" class="grid">
+      <section>
+        <h2>Provider</h2>
+        <label>
+          <span class="label-row"><span>Model</span><span class="hint" id="modelDefault"></span></span>
+          <select id="modelChoice" name="modelChoice"></select>
+        </label>
+        <label id="customModelField">
+          <span>Custom model ID</span>
+          <input id="model" name="model" type="text" autocomplete="off">
+        </label>
+        <label id="codexCommandField">
+          <span>Codex command</span>
+          <input id="codexCommand" name="codexCommand" type="text" autocomplete="off">
+        </label>
+        <label id="codexExtensionCommandField">
+          <span>Codex extension command</span>
+          <input id="codexExtensionCommand" name="codexExtensionCommand" type="text" autocomplete="off">
+        </label>
+        <label id="customBaseUrlField">
+          <span>Base URL</span>
+          <input id="customOpenAiCompatibleBaseUrl" name="customOpenAiCompatibleBaseUrl" type="url" autocomplete="off">
+        </label>
+      </section>
+
+      <section id="authSection">
+        <h2>Authentication</h2>
+        <label>
+          <span class="label-row"><span id="providerApiKeyLabel">Provider API key</span><span class="hint" id="providerApiKeyHint"></span></span>
+          <span class="secret-field">
+            <input id="providerApiKey" name="providerApiKey" type="password" autocomplete="off">
+            <button class="icon-button" type="button" data-toggle-secret="providerApiKey" data-secret-label="provider API key" aria-label="Show provider API key" title="Show API key">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </span>
+        </label>
+        <label>
+          <span>Selected provider override</span>
+          <span class="secret-field">
+            <input id="apiKey" name="apiKey" type="password" autocomplete="off">
+            <button class="icon-button" type="button" data-toggle-secret="apiKey" data-secret-label="selected provider override key" aria-label="Show selected provider override key" title="Show API key">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </span>
+        </label>
+      </section>
+
+      <section id="reasoningSection">
+        <h2>Reasoning</h2>
+        <label>
+          <span>Effort</span>
+          <select id="reasoningEffort" name="reasoningEffort">
+            <option value="none">None</option>
+            <option value="minimal">Minimal</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="xhigh">XHigh</option>
+          </select>
+        </label>
+      </section>
+
+      <section id="samplingSection">
+        <h2>Sampling</h2>
+        <label>
+          <span>Temperature</span>
+          <input id="temperatureOverride" name="temperatureOverride" type="number" min="0" max="2" step="0.1">
+        </label>
+        <label>
+          <span>Top P</span>
+          <input id="topPOverride" name="topPOverride" type="number" min="0" max="1" step="0.01">
+        </label>
+        <label>
+          <span>Max output tokens</span>
+          <input id="maxOutputTokensOverride" name="maxOutputTokensOverride" type="number" min="1" step="1">
+        </label>
+      </section>
+
+      <section class="wide">
+        <h2>Prompt</h2>
+        <label>
+          <span>Prompt template</span>
+          <textarea id="promptTemplate" name="promptTemplate"></textarea>
+        </label>
+        <label>
+          <span>Additional instructions</span>
+          <textarea id="additionalPromptInstructions" name="additionalPromptInstructions"></textarea>
+        </label>
+      </section>
+
+      <section>
+        <h2>Limits</h2>
+        <label>
+          <span>Max diff characters</span>
+          <input id="maxDiffChars" name="maxDiffChars" type="number" min="1" step="1000">
+        </label>
+      </section>
+
+      <section>
+        <h2>Analytics</h2>
+        <label class="inline">
+          <input id="trackTokenUsageAnalytics" name="trackTokenUsageAnalytics" type="checkbox">
+          <span>Track token usage</span>
+        </label>
+        <label>
+          <span>Retention days</span>
+          <input id="analyticsRetentionDays" name="analyticsRetentionDays" type="number" min="1" max="30" step="1">
+        </label>
+      </section>
+
+      <div class="actions wide">
+        <div class="status" id="saveStatus" role="status" aria-live="polite"></div>
+        <button class="primary" type="submit">Save Settings</button>
+      </div>
+    </form>
+  </main>
+
+  <script nonce="${nonce}" type="application/json" id="modeData">${modeData}</script>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    const modes = JSON.parse(document.getElementById("modeData").textContent);
+    const persistedUiState = vscode.getState() || {};
+    const state = {
+      provider: "codexCli",
+      apiKeys: {},
+      apiKeyConfigured: false,
+      providerApiKeysConfigured: {},
+      secretVisibility: Object.assign({ providerApiKey: false, apiKey: false }, persistedUiState.secretVisibility || {})
+    };
+
+    const controls = {
+      providerSelect: document.getElementById("providerSelect"),
+      modeSummary: document.getElementById("modeSummary"),
+      modelDefault: document.getElementById("modelDefault"),
+      modelChoice: document.getElementById("modelChoice"),
+      customModelField: document.getElementById("customModelField"),
+      model: document.getElementById("model"),
+      codexCommandField: document.getElementById("codexCommandField"),
+      codexCommand: document.getElementById("codexCommand"),
+      codexExtensionCommandField: document.getElementById("codexExtensionCommandField"),
+      codexExtensionCommand: document.getElementById("codexExtensionCommand"),
+      customBaseUrlField: document.getElementById("customBaseUrlField"),
+      customOpenAiCompatibleBaseUrl: document.getElementById("customOpenAiCompatibleBaseUrl"),
+      authSection: document.getElementById("authSection"),
+      providerApiKeyLabel: document.getElementById("providerApiKeyLabel"),
+      providerApiKeyHint: document.getElementById("providerApiKeyHint"),
+      providerApiKey: document.getElementById("providerApiKey"),
+      apiKey: document.getElementById("apiKey"),
+      reasoningSection: document.getElementById("reasoningSection"),
+      reasoningEffort: document.getElementById("reasoningEffort"),
+      samplingSection: document.getElementById("samplingSection"),
+      temperatureOverride: document.getElementById("temperatureOverride"),
+      topPOverride: document.getElementById("topPOverride"),
+      maxOutputTokensOverride: document.getElementById("maxOutputTokensOverride"),
+      promptTemplate: document.getElementById("promptTemplate"),
+      additionalPromptInstructions: document.getElementById("additionalPromptInstructions"),
+      maxDiffChars: document.getElementById("maxDiffChars"),
+      trackTokenUsageAnalytics: document.getElementById("trackTokenUsageAnalytics"),
+      analyticsRetentionDays: document.getElementById("analyticsRetentionDays"),
+      saveStatus: document.getElementById("saveStatus")
+    };
+
+    function applyState(nextState) {
+      Object.assign(state, nextState);
+      state.apiKeys = Object.assign({}, nextState.apiKeys || {});
+      state.providerApiKeysConfigured = Object.assign({}, nextState.providerApiKeysConfigured || {});
+      controls.providerSelect.value = state.provider || "codexCli";
+      controls.codexCommand.value = state.codexCommand || "codex";
+      controls.codexExtensionCommand.value = state.codexExtensionCommand || "";
+      controls.model.value = state.model || "";
+      controls.apiKey.value = "";
+      controls.apiKey.placeholder = state.apiKeyConfigured ? "Configured" : "";
+      controls.customOpenAiCompatibleBaseUrl.value = state.customOpenAiCompatibleBaseUrl || "";
+      controls.reasoningEffort.value = state.reasoningEffort || "low";
+      controls.maxDiffChars.value = numberValue(state.maxDiffChars);
+      controls.promptTemplate.value = state.promptTemplate || "";
+      controls.additionalPromptInstructions.value = state.additionalPromptInstructions || "";
+      controls.temperatureOverride.value = numberValue(state.temperatureOverride);
+      controls.topPOverride.value = numberValue(state.topPOverride);
+      controls.maxOutputTokensOverride.value = numberValue(state.maxOutputTokensOverride);
+      controls.trackTokenUsageAnalytics.checked = state.trackTokenUsageAnalytics !== false;
+      controls.analyticsRetentionDays.value = numberValue(state.analyticsRetentionDays);
+      renderMode();
+      applySecretVisibility();
+      setStatus("");
+    }
+
+    function numberValue(value) {
+      return typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+    }
+
+    function renderMode() {
+      const mode = modes[state.provider] || modes.codexCli;
+      controls.modeSummary.textContent = mode.label;
+      controls.providerSelect.value = mode.provider;
+      controls.modelDefault.textContent = "Default: " + mode.defaultModel;
+      renderModelChoices(mode);
+      controls.codexCommandField.classList.toggle("hidden", !mode.requiresCodexCommand);
+      controls.codexExtensionCommandField.classList.toggle("hidden", !mode.requiresCodexExtensionCommand);
+      controls.customBaseUrlField.classList.toggle("hidden", !mode.requiresCustomBaseUrl);
+      controls.authSection.classList.toggle("hidden", !mode.apiKeySetting);
+      controls.reasoningSection.classList.toggle("hidden", !mode.supportsReasoningEffort);
+      controls.samplingSection.classList.toggle("hidden", !mode.supportsSamplingOverrides);
+      controls.providerApiKeyLabel.textContent = mode.apiKeyLabel || "Provider API key";
+      const configured = Boolean(state.providerApiKeysConfigured[state.provider]);
+      controls.providerApiKeyHint.textContent = [mode.apiKeyEnvironment || "", configured ? "configured" : ""].filter(Boolean).join(" | ");
+      controls.providerApiKey.value = state.apiKeys[state.provider] || "";
+      controls.providerApiKey.placeholder = configured ? "Configured" : "";
+    }
+
+    function renderModelChoices(mode) {
+      const configuredModel = controls.model.value.trim();
+      const knownModels = Array.from(new Set([mode.defaultModel].concat(mode.modelOptions || [])));
+      controls.modelChoice.replaceChildren();
+      controls.modelChoice.appendChild(new Option("Use provider default", ""));
+      knownModels.forEach((model) => {
+        controls.modelChoice.appendChild(new Option(model, model));
+      });
+      controls.modelChoice.appendChild(new Option("Custom model ID", "__custom"));
+
+      if (!configuredModel) {
+        controls.modelChoice.value = "";
+        controls.customModelField.classList.add("hidden");
+        controls.model.placeholder = mode.defaultModel;
+        return;
+      }
+
+      if (knownModels.includes(configuredModel)) {
+        controls.modelChoice.value = configuredModel;
+        controls.customModelField.classList.add("hidden");
+      } else {
+        controls.modelChoice.value = "__custom";
+        controls.customModelField.classList.remove("hidden");
+      }
+      controls.model.placeholder = mode.defaultModel;
+    }
+
+    function rememberProviderKey() {
+      const mode = modes[state.provider];
+      if (mode && mode.apiKeySetting) {
+        state.apiKeys[state.provider] = controls.providerApiKey.value;
+      }
+    }
+
+    function nullableNumber(control) {
+      return control.value.trim() === "" ? null : Number(control.value);
+    }
+
+    function setStatus(message, isError) {
+      controls.saveStatus.textContent = message;
+      controls.saveStatus.classList.toggle("error", Boolean(isError));
+    }
+
+    function validateVisibleSettings() {
+      const mode = modes[state.provider] || modes.codexCli;
+      if (mode.requiresCustomBaseUrl && !controls.customOpenAiCompatibleBaseUrl.value.trim()) {
+        return "Base URL is required for the custom OpenAI-compatible provider.";
+      }
+      if (mode.requiresCodexCommand && !controls.codexCommand.value.trim()) {
+        return "Codex command is required for Codex modes.";
+      }
+      if (!controls.maxDiffChars.value || Number(controls.maxDiffChars.value) <= 0) {
+        return "Max diff characters must be a positive number.";
+      }
+      if (!controls.analyticsRetentionDays.value) {
+        return "Analytics retention days is required.";
+      }
+      const retentionDays = Number(controls.analyticsRetentionDays.value);
+      if (!Number.isFinite(retentionDays) || retentionDays < 1 || retentionDays > 30) {
+        return "Analytics retention days must be between 1 and 30.";
+      }
+      return "";
+    }
+
+    function applySecretVisibility() {
+      document.querySelectorAll("[data-toggle-secret]").forEach((button) => {
+        const inputId = button.getAttribute("data-toggle-secret");
+        const input = document.getElementById(inputId);
+        const visible = Boolean(state.secretVisibility[inputId]);
+        const label = button.getAttribute("data-secret-label") || "API key";
+        input.type = visible ? "text" : "password";
+        button.setAttribute("aria-label", (visible ? "Hide " : "Show ") + label);
+        button.setAttribute("title", visible ? "Hide API key" : "Show API key");
+        button.innerHTML = visible
+          ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18"/><path d="M10.6 10.6a3 3 0 0 0 4.2 4.2"/><path d="M9.5 5.4A10.8 10.8 0 0 1 12 5c6 0 9.5 7 9.5 7a16 16 0 0 1-3 4.1"/><path d="M6.4 6.7C3.8 8.4 2.5 12 2.5 12s3.5 7 9.5 7a10.8 10.8 0 0 0 4.1-.8"/></svg>'
+          : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="3"/></svg>';
+      });
+      vscode.setState({ secretVisibility: state.secretVisibility });
+    }
+
+    controls.providerSelect.addEventListener("change", () => {
+      rememberProviderKey();
+      state.provider = controls.providerSelect.value;
+      controls.model.value = "";
+      setStatus("");
+      renderMode();
+    });
+
+    controls.modelChoice.addEventListener("change", () => {
+      const selected = controls.modelChoice.value;
+      if (selected === "__custom") {
+        controls.customModelField.classList.remove("hidden");
+        controls.model.focus();
+      } else {
+        controls.model.value = selected;
+        controls.customModelField.classList.add("hidden");
+      }
+    });
+
+    document.querySelectorAll("[data-toggle-secret]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const inputId = button.getAttribute("data-toggle-secret");
+        state.secretVisibility[inputId] = !state.secretVisibility[inputId];
+        applySecretVisibility();
+      });
+    });
+
+    document.getElementById("nativeSettings").addEventListener("click", () => {
+      vscode.postMessage({ type: "openNativeSettings" });
+    });
+
+    document.getElementById("settingsForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      rememberProviderKey();
+      const validationError = validateVisibleSettings();
+      if (validationError) {
+        setStatus(validationError, true);
+        return;
+      }
+      setStatus("Saving settings...");
+      vscode.postMessage({
+        type: "save",
+        values: {
+          provider: state.provider,
+          codexCommand: controls.codexCommand.value,
+          codexExtensionCommand: controls.codexExtensionCommand.value,
+          model: controls.model.value,
+          apiKey: controls.apiKey.value,
+          providerApiKey: controls.providerApiKey.value,
+          customOpenAiCompatibleBaseUrl: controls.customOpenAiCompatibleBaseUrl.value,
+          reasoningEffort: controls.reasoningEffort.value,
+          maxDiffChars: Number(controls.maxDiffChars.value),
+          promptTemplate: controls.promptTemplate.value,
+          additionalPromptInstructions: controls.additionalPromptInstructions.value,
+          temperatureOverride: nullableNumber(controls.temperatureOverride),
+          topPOverride: nullableNumber(controls.topPOverride),
+          maxOutputTokensOverride: nullableNumber(controls.maxOutputTokensOverride),
+          trackTokenUsageAnalytics: controls.trackTokenUsageAnalytics.checked,
+          analyticsRetentionDays: Number(controls.analyticsRetentionDays.value)
+        }
+      });
+    });
+
+    window.addEventListener("message", (event) => {
+      if (event.data && event.data.type === "state") {
+        applyState(event.data.state || {});
+      }
+      if (event.data && event.data.type === "saved") {
+        setStatus("Settings saved.");
+      }
+      if (event.data && event.data.type === "error") {
+        setStatus(event.data.message || "Could not save settings.", true);
+      }
+    });
+
+    vscode.postMessage({ type: "ready" });
+  </script>
+</body>
+</html>`;
+}
+
+function createNonce(): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let nonce = "";
+  for (let i = 0; i < 32; i += 1) {
+    nonce += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+  }
+  return nonce;
+}
+
+function safeJsonForScript(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 async function autoConfigureCodexCliIfDefault(): Promise<void> {
@@ -340,7 +1262,7 @@ async function generateCommitMessage(
     return;
   }
 
-  const settings = readGenerationSettings();
+  const settings = await readGenerationSettings(context.secrets);
 
   try {
     await vscode.window.withProgress(
@@ -407,13 +1329,13 @@ async function generateCommitMessage(
   }
 }
 
-async function improvePrompt(): Promise<void> {
+async function improvePrompt(context: vscode.ExtensionContext): Promise<void> {
   const source = await getPromptImprovementSource();
   if (!source) {
     return;
   }
 
-  const settings = readGenerationSettings();
+  const settings = await readGenerationSettings(context.secrets);
   const cwd = getPromptImprovementCwd(source.editor);
 
   try {
@@ -699,33 +1621,40 @@ async function updateStatusBarTooltip(
     "AI Commit & Prompt Helper > Analytics";
 }
 
-function readGenerationSettings(): GenerationSettings {
+async function readGenerationSettings(secrets: vscode.SecretStorage): Promise<GenerationSettings> {
   const provider = normalizeGenerationProvider(
     getConfiguredValue<string>("provider", "codexCli")
   );
   const configuredModel = getConfiguredValue<string>("model", "").trim();
+  const providerSecrets: Partial<Record<GenerationProvider, string>> = {};
+  for (const mode of Object.values(PROVIDER_MODE_DEFINITIONS)) {
+    if (mode.secretKey) {
+      providerSecrets[mode.provider] = await getSecretValue(secrets, mode.secretKey);
+    }
+  }
 
   return {
     provider,
     codexExtensionCommand: getConfiguredValue<string>("codexExtensionCommand", "").trim(),
     codexCommand: getConfiguredValue<string>("codexCommand", "codex"),
     model: configuredModel || getDefaultModelForProvider(provider),
-    apiKey: getConfiguredValue<string>("apiKey", "").trim(),
-    openAiApiKey: getConfiguredValue<string>("openAiApiKey", "").trim(),
-    deepSeekApiKey: getConfiguredValue<string>("deepSeekApiKey", "").trim(),
-    anthropicApiKey: getConfiguredValue<string>("anthropicApiKey", "").trim(),
-    cohereApiKey: getConfiguredValue<string>("cohereApiKey", "").trim(),
-    geminiApiKey: getConfiguredValue<string>("geminiApiKey", "").trim(),
-    mistralApiKey: getConfiguredValue<string>("mistralApiKey", "").trim(),
-    openRouterApiKey: getConfiguredValue<string>("openRouterApiKey", "").trim(),
+    apiKey: await getSecretValue(secrets, GENERIC_API_KEY_SECRET_KEY),
+    legacyApiKey: getConfiguredValue<string>("apiKey", "").trim(),
+    openAiApiKey: providerSecrets.openai || getConfiguredValue<string>("openAiApiKey", "").trim(),
+    deepSeekApiKey: providerSecrets.deepseek || getConfiguredValue<string>("deepSeekApiKey", "").trim(),
+    anthropicApiKey: providerSecrets.anthropic || getConfiguredValue<string>("anthropicApiKey", "").trim(),
+    cohereApiKey: providerSecrets.cohere || getConfiguredValue<string>("cohereApiKey", "").trim(),
+    geminiApiKey: providerSecrets.gemini || getConfiguredValue<string>("geminiApiKey", "").trim(),
+    mistralApiKey: providerSecrets.mistral || getConfiguredValue<string>("mistralApiKey", "").trim(),
+    openRouterApiKey: providerSecrets.openrouter || getConfiguredValue<string>("openRouterApiKey", "").trim(),
+    huggingFaceApiKey: providerSecrets.huggingface || getConfiguredValue<string>("huggingFaceApiKey", "").trim(),
     customOpenAiCompatibleBaseUrl: getConfiguredValue<string>(
       "customOpenAiCompatibleBaseUrl",
       ""
     ).trim(),
-    customOpenAiCompatibleApiKey: getConfiguredValue<string>(
-      "customOpenAiCompatibleApiKey",
-      ""
-    ).trim(),
+    customOpenAiCompatibleApiKey:
+      providerSecrets.customOpenAiCompatible ||
+      getConfiguredValue<string>("customOpenAiCompatibleApiKey", "").trim(),
     reasoningEffort: normalizeReasoningEffort(getConfiguredValue<string>("reasoningEffort", "low")),
     maxDiffChars: normalizePositiveInteger(getConfiguredValue<number>("maxDiffChars", 120000), 120000),
     promptTemplate: getConfiguredValue<string>("promptTemplate", DEFAULT_PROMPT_TEMPLATE),
@@ -748,51 +1677,6 @@ function readGenerationSettings(): GenerationSettings {
     ),
     trackTokenUsageAnalytics: getConfiguredValue<boolean>("trackTokenUsageAnalytics", true)
   };
-}
-
-function normalizeGenerationProvider(value: string): GenerationProvider {
-  switch (value) {
-    case "cli":
-    case "codexCli":
-      return "codexCli";
-    case "extensionThenCli":
-    case "codexExtensionThenCli":
-      return "codexExtensionThenCli";
-    case "openai":
-    case "deepseek":
-    case "anthropic":
-    case "cohere":
-    case "gemini":
-    case "mistral":
-    case "openrouter":
-    case "customOpenAiCompatible":
-      return value;
-    default:
-      return "codexCli";
-  }
-}
-
-function getDefaultModelForProvider(provider: GenerationProvider): string {
-  switch (provider) {
-    case "openai":
-    case "customOpenAiCompatible":
-      return "gpt-5.4-mini";
-    case "deepseek":
-      return "deepseek-v4-flash";
-    case "anthropic":
-      return "claude-opus-4-1-20250805";
-    case "cohere":
-      return "command-a-03-2025";
-    case "gemini":
-      return "gemini-2.5-flash";
-    case "mistral":
-      return "mistral-large-latest";
-    case "openrouter":
-      return "openai/gpt-4";
-    case "codexCli":
-    case "codexExtensionThenCli":
-      return DEFAULT_MODEL;
-  }
 }
 
 function buildPrompt(
@@ -1044,6 +1928,13 @@ function getProviderClient(provider: GenerationProvider): ProviderClient {
         "https://openrouter.ai/api/v1",
         (settings) => getApiKey(settings, "openrouter")
       );
+    case "huggingface":
+      return createOpenAiCompatibleClient(
+        provider,
+        "Hugging Face",
+        "https://router.huggingface.co/v1",
+        (settings) => getApiKey(settings, "huggingface")
+      );
     case "customOpenAiCompatible":
       return createOpenAiCompatibleClient(
         provider,
@@ -1069,31 +1960,6 @@ function getProviderClient(provider: GenerationProvider): ProviderClient {
         label: "Google Gemini",
         generate: generateWithGemini
       };
-  }
-}
-
-function getProviderLabel(provider: GenerationProvider): string {
-  switch (provider) {
-    case "codexCli":
-      return "Codex CLI";
-    case "codexExtensionThenCli":
-      return "Codex extension/CLI";
-    case "openai":
-      return "OpenAI";
-    case "deepseek":
-      return "DeepSeek";
-    case "anthropic":
-      return "Anthropic Claude";
-    case "cohere":
-      return "Cohere";
-    case "gemini":
-      return "Google Gemini";
-    case "mistral":
-      return "Mistral";
-    case "openrouter":
-      return "OpenRouter";
-    case "customOpenAiCompatible":
-      return "custom OpenAI-compatible provider";
   }
 }
 
@@ -1146,10 +2012,7 @@ function createOpenAiCompatibleClient(
 
       const json = await postJson(
         `${baseUrl.replace(/\/+$/g, "")}/chat/completions`,
-        {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-        },
+        buildOpenAiCompatibleHeaders(provider, apiKey),
         body,
         label
       );
@@ -1163,6 +2026,23 @@ function createOpenAiCompatibleClient(
       };
     }
   };
+}
+
+function buildOpenAiCompatibleHeaders(
+  provider: GenerationProvider,
+  apiKey: string
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json"
+  };
+
+  if (provider === "openrouter") {
+    headers["HTTP-Referer"] = "https://github.com/vladnoskv/Codex-Commit";
+    headers["X-OpenRouter-Title"] = "AI Commit & Prompt Helper";
+  }
+
+  return headers;
 }
 
 async function generateWithAnthropic(
@@ -1298,36 +2178,70 @@ function addSamplingOptions(
 }
 
 function getApiKey(settings: GenerationSettings, provider: GenerationProvider): string {
-  if (settings.apiKey) {
-    return settings.apiKey;
-  }
-
   switch (provider) {
     case "openai":
-      return settings.openAiApiKey || process.env.OPENAI_API_KEY || "";
+      return resolveApiKeyValue({
+        genericSecret: settings.apiKey,
+        providerSecret: settings.openAiApiKey,
+        legacySetting: settings.legacyApiKey,
+        environmentValues: [process.env.OPENAI_API_KEY ?? ""]
+      });
     case "deepseek":
-      return settings.deepSeekApiKey || process.env.DEEPSEEK_API_KEY || "";
+      return resolveApiKeyValue({
+        genericSecret: settings.apiKey,
+        providerSecret: settings.deepSeekApiKey,
+        legacySetting: settings.legacyApiKey,
+        environmentValues: [process.env.DEEPSEEK_API_KEY ?? ""]
+      });
     case "anthropic":
-      return settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY || "";
+      return resolveApiKeyValue({
+        genericSecret: settings.apiKey,
+        providerSecret: settings.anthropicApiKey,
+        legacySetting: settings.legacyApiKey,
+        environmentValues: [process.env.ANTHROPIC_API_KEY ?? ""]
+      });
     case "cohere":
-      return settings.cohereApiKey || process.env.COHERE_API_KEY || "";
+      return resolveApiKeyValue({
+        genericSecret: settings.apiKey,
+        providerSecret: settings.cohereApiKey,
+        legacySetting: settings.legacyApiKey,
+        environmentValues: [process.env.COHERE_API_KEY ?? ""]
+      });
     case "gemini":
-      return (
-        settings.geminiApiKey ||
-        process.env.GEMINI_API_KEY ||
-        process.env.GOOGLE_API_KEY ||
-        ""
-      );
+      return resolveApiKeyValue({
+        genericSecret: settings.apiKey,
+        providerSecret: settings.geminiApiKey,
+        legacySetting: settings.legacyApiKey,
+        environmentValues: [process.env.GEMINI_API_KEY ?? "", process.env.GOOGLE_API_KEY ?? ""]
+      });
     case "mistral":
-      return settings.mistralApiKey || process.env.MISTRAL_API_KEY || "";
+      return resolveApiKeyValue({
+        genericSecret: settings.apiKey,
+        providerSecret: settings.mistralApiKey,
+        legacySetting: settings.legacyApiKey,
+        environmentValues: [process.env.MISTRAL_API_KEY ?? ""]
+      });
     case "openrouter":
-      return settings.openRouterApiKey || process.env.OPENROUTER_API_KEY || "";
+      return resolveApiKeyValue({
+        genericSecret: settings.apiKey,
+        providerSecret: settings.openRouterApiKey,
+        legacySetting: settings.legacyApiKey,
+        environmentValues: [process.env.OPENROUTER_API_KEY ?? ""]
+      });
+    case "huggingface":
+      return resolveApiKeyValue({
+        genericSecret: settings.apiKey,
+        providerSecret: settings.huggingFaceApiKey,
+        legacySetting: settings.legacyApiKey,
+        environmentValues: [process.env.HF_TOKEN ?? "", process.env.HUGGINGFACE_API_KEY ?? ""]
+      });
     case "customOpenAiCompatible":
-      return (
-        settings.customOpenAiCompatibleApiKey ||
-        process.env.OPENAI_COMPATIBLE_API_KEY ||
-        ""
-      );
+      return resolveApiKeyValue({
+        genericSecret: settings.apiKey,
+        providerSecret: settings.customOpenAiCompatibleApiKey,
+        legacySetting: settings.legacyApiKey,
+        environmentValues: [process.env.OPENAI_COMPATIBLE_API_KEY ?? ""]
+      });
     case "codexCli":
     case "codexExtensionThenCli":
       return "";
@@ -1350,6 +2264,8 @@ function getMissingApiKeyMessage(provider: GenerationProvider): string {
       return "Set aiCommitPromptHelper.mistralApiKey or MISTRAL_API_KEY before using Mistral.";
     case "openrouter":
       return "Set aiCommitPromptHelper.openRouterApiKey or OPENROUTER_API_KEY before using OpenRouter.";
+    case "huggingface":
+      return "Set aiCommitPromptHelper.huggingFaceApiKey, HF_TOKEN, or HUGGINGFACE_API_KEY before using Hugging Face.";
     case "customOpenAiCompatible":
       return "Set aiCommitPromptHelper.customOpenAiCompatibleApiKey or OPENAI_COMPATIBLE_API_KEY before using the custom OpenAI-compatible provider.";
     case "codexCli":

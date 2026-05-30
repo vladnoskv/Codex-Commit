@@ -2,7 +2,7 @@
 
 This document shows practical `settings.json` examples for **AI Commit & Prompt Helper**.
 
-Applies to extension release: `v2.0.1`.
+Applies to extension release: `v2.0.2`.
 
 ## Visual Preview
 
@@ -16,6 +16,11 @@ Settings examples:
 ![Settings example 2](../media/commit-settings-2.PNG)
 
 ## Baseline
+
+Run `AI Helper: Open Settings` for the provider-mode setup panel. It writes non-secret
+settings shown below, while hiding controls that are not used by the selected provider.
+API keys entered in the panel are stored in VS Code SecretStorage. Existing key values
+in `settings.json` still work as migration fallbacks.
 
 ```json
 {
@@ -71,12 +76,12 @@ Google Gemini:
 }
 ```
 
-Mistral, Cohere, OpenRouter, and custom OpenAI-compatible endpoints:
+Mistral, Cohere, OpenRouter, Hugging Face, and custom OpenAI-compatible endpoints:
 
 ```json
 {
   "aiCommitPromptHelper.provider": "mistral",
-  "aiCommitPromptHelper.model": "mistral-large-latest",
+  "aiCommitPromptHelper.model": "mistral-small-latest",
   "aiCommitPromptHelper.mistralApiKey": ""
 }
 ```
@@ -92,8 +97,16 @@ Mistral, Cohere, OpenRouter, and custom OpenAI-compatible endpoints:
 ```json
 {
   "aiCommitPromptHelper.provider": "openrouter",
-  "aiCommitPromptHelper.model": "openai/gpt-4",
+  "aiCommitPromptHelper.model": "openai/gpt-5.2-mini",
   "aiCommitPromptHelper.openRouterApiKey": ""
+}
+```
+
+```json
+{
+  "aiCommitPromptHelper.provider": "huggingface",
+  "aiCommitPromptHelper.model": "openai/gpt-oss-20b:cheapest",
+  "aiCommitPromptHelper.huggingFaceApiKey": ""
 }
 ```
 
@@ -106,7 +119,7 @@ Mistral, Cohere, OpenRouter, and custom OpenAI-compatible endpoints:
 }
 ```
 
-Prefer environment variables for API keys:
+Prefer the setup panel or environment variables for API keys. Environment fallbacks:
 
 - `OPENAI_API_KEY`
 - `DEEPSEEK_API_KEY`
@@ -115,7 +128,15 @@ Prefer environment variables for API keys:
 - `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - `MISTRAL_API_KEY`
 - `OPENROUTER_API_KEY`
+- `HF_TOKEN` or `HUGGINGFACE_API_KEY`
 - `OPENAI_COMPATIBLE_API_KEY`
+
+Low-cost provider presets:
+
+- OpenRouter: `openai/gpt-5.2-mini`, `google/gemini-2.5-flash`, `deepseek/deepseek-chat`, `qwen/qwen3-coder`
+- Hugging Face: `openai/gpt-oss-20b:cheapest`, `openai/gpt-oss-120b:cheapest`, `deepseek-ai/DeepSeek-R1:cheapest`
+- Mistral: `mistral-small-latest`
+- Gemini: `gemini-2.5-flash`
 
 ## CLI Setup
 

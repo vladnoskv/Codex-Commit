@@ -6,6 +6,7 @@ package-lock.json
 *.vsix
 .github/**
 dist/**/*.map
+dist/selfTest.js
 media/logo.svg
 .env
 ADMIN_ONLY_PUSH.md

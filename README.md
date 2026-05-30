@@ -1,12 +1,19 @@
-# AI Commit & Prompt Helper v2.0.1
+# AI Commit & Prompt Helper v2.0.2
 
 ![AI Commit & Prompt Helper logo](media/logo.png)
 
-Generate structured, review-friendly commit messages from staged Git changes and improve coding prompts in VS Code using Codex CLI or popular LLM APIs.
+Generate structured, review-friendly AI commit messages from staged Git changes and improve coding prompts in VS Code using Codex CLI, OpenRouter, Hugging Face, and OpenAI-compatible LLM APIs.
 
-Current extension release: `v2.0.1`.
+Current extension release: `v2.0.2`.
 
 ## Release Notes
+
+### v2.0.2
+
+- Added a provider-mode setup panel with compact provider/model dropdowns.
+- Added SecretStorage-backed API key saving with legacy setting and environment-variable fallbacks.
+- Added Hugging Face provider support through its OpenAI-compatible router.
+- Added low-cost model presets for OpenRouter, Hugging Face, Mistral, Gemini, and DeepSeek-oriented workflows.
 
 ### v2.0.1
 
@@ -15,7 +22,7 @@ Current extension release: `v2.0.1`.
 ### v2.0.0
 
 - Renamed the extension package to **AI Commit & Prompt Helper** (`ai-commit-prompt-helper`).
-- Added a provider interface for Codex CLI, OpenAI-compatible APIs, Anthropic Claude, Cohere, Google Gemini, Mistral, DeepSeek, OpenRouter, and custom OpenAI-compatible endpoints.
+- Added a provider interface for Codex CLI, OpenAI-compatible APIs, Anthropic Claude, Cohere, Google Gemini, Mistral, DeepSeek, OpenRouter, Hugging Face, and custom OpenAI-compatible endpoints.
 - Added `AI Helper: Improve Prompt` for selected editor text, with review before copy/open/replace.
 - Moved settings to `aiCommitPromptHelper.*`; existing `codexCommitWidget.*` values are still read as fallbacks.
 
@@ -53,9 +60,16 @@ Set `aiCommitPromptHelper.provider` to one of:
 - `gemini`
 - `mistral`
 - `openrouter`
+- `huggingface`
 - `customOpenAiCompatible`
 
-HTTP providers use provider-specific API key settings or environment variables. Prefer environment variables for secrets.
+HTTP providers use provider-specific API keys from VS Code SecretStorage when saved through **AI Helper: Open Settings**. Existing `settings.json` API key values and environment variables still work as fallback migration paths.
+
+Low-cost presets are included for providers that support broad routing:
+
+- OpenRouter: `openai/gpt-5.2-mini`, `google/gemini-2.5-flash`, `deepseek/deepseek-chat`, `qwen/qwen3-coder`
+- Hugging Face: `openai/gpt-oss-20b:cheapest`, `openai/gpt-oss-120b:cheapest`, `deepseek-ai/DeepSeek-R1:cheapest`
+- Mistral, Gemini, and DeepSeek default toward smaller/flash-style models where practical.
 
 ## What It Sends
 
@@ -71,6 +85,12 @@ Prompt improvement sends only the selected/input prompt text. Absolute local rep
 
 ## Settings
 
+Run **AI Helper: Open Settings** to use the provider-mode setup panel. Each mode shows
+only the settings that the extension maps into that provider's request.
+The panel uses provider/model dropdowns, custom model input, API key visibility toggles,
+and provider-specific validation. API keys entered in the panel are stored in VS Code
+SecretStorage instead of normal settings.
+
 Core:
 
 - `aiCommitPromptHelper.provider`
@@ -81,17 +101,12 @@ Core:
 - `aiCommitPromptHelper.codexExtensionCommand`
 - `aiCommitPromptHelper.customOpenAiCompatibleBaseUrl`
 
-API keys:
+API keys and tokens:
 
-- `aiCommitPromptHelper.openAiApiKey` or `OPENAI_API_KEY`
-- `aiCommitPromptHelper.deepSeekApiKey` or `DEEPSEEK_API_KEY`
-- `aiCommitPromptHelper.anthropicApiKey` or `ANTHROPIC_API_KEY`
-- `aiCommitPromptHelper.cohereApiKey` or `COHERE_API_KEY`
-- `aiCommitPromptHelper.geminiApiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
-- `aiCommitPromptHelper.mistralApiKey` or `MISTRAL_API_KEY`
-- `aiCommitPromptHelper.openRouterApiKey` or `OPENROUTER_API_KEY`
-- `aiCommitPromptHelper.customOpenAiCompatibleApiKey` or `OPENAI_COMPATIBLE_API_KEY`
-- `aiCommitPromptHelper.apiKey` as a generic override for the selected HTTP provider
+- Setup panel: stores provider keys in VS Code SecretStorage.
+- Existing `aiCommitPromptHelper.*ApiKey` values remain supported as fallbacks.
+- Environment fallbacks: `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `COHERE_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`, `HF_TOKEN`, `HUGGINGFACE_API_KEY`, and `OPENAI_COMPATIBLE_API_KEY`.
+- `aiCommitPromptHelper.apiKey` remains a legacy generic override for the selected HTTP provider.
 
 Prompt/style customization:
 
@@ -139,7 +154,7 @@ Token usage is stored in settings and auto-pruned after `analyticsRetentionDays`
 - No repository detected: open a folder/workspace with a Git repo.
 - No staged changes: stage files before generating.
 - Codex command not found: run `AI Helper: Setup Codex CLI` or set `aiCommitPromptHelper.codexCommand`.
-- HTTP provider auth errors: set the matching API key setting or environment variable.
+- HTTP provider auth errors: save the key in `AI Helper: Open Settings`, or set the matching environment variable.
 - Legacy settings: v2 reads existing `codexCommitWidget.*` values as fallbacks, but new settings should use `aiCommitPromptHelper.*`.
 
 ## License

@@ -1,16 +1,27 @@
 {
   "name": "ai-commit-prompt-helper",
   "displayName": "AI Commit & Prompt Helper",
-  "description": "Generate structured commit messages and improve prompts in VS Code using Codex CLI or popular LLM APIs.",
-  "version": "2.0.1",
+  "description": "Generate structured AI commit messages in VS Code with Codex CLI, OpenRouter, Hugging Face, and OpenAI-compatible LLM APIs.",
+  "version": "2.0.2",
   "license": "MIT",
   "publisher": "VladNoskov",
   "icon": "media/logo.png",
   "keywords": [
     "git",
     "commit",
+    "commit message",
+    "commit generator",
+    "ai commit",
+    "ai commit message",
     "source control",
+    "scm",
     "conventional commits",
+    "openrouter",
+    "huggingface",
+    "hugging face",
+    "openai compatible",
+    "llm",
+    "low cost ai",
     "codex",
     "openai",
     "anthropic",
@@ -109,6 +120,7 @@
             "gemini",
             "mistral",
             "openrouter",
+            "huggingface",
             "customOpenAiCompatible"
           ],
           "default": "codexCli",
@@ -159,7 +171,7 @@
         },
         "aiCommitPromptHelper.promptTemplate": {
           "type": "string",
-          "default": "You are generating a git commit message from staged changes. Return only the final commit message, no code fences, no explanations. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts supported by the diff.",
+          "default": "You are generating a git commit message from staged changes. Return only the final commit message text: no preface, no code fences, no markdown wrapper, no explanations outside the commit message. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts directly supported by the staged diff. If validation is not shown in the diff, say not run or not shown rather than inventing it.",
           "description": "Prompt prefix sent to the selected AI provider before status, file list, stats, and patch."
         },
         "aiCommitPromptHelper.additionalPromptInstructions": {
@@ -234,7 +246,12 @@
         "aiCommitPromptHelper.openRouterApiKey": {
           "type": "string",
           "default": "",
-          "description": "OpenRouter API key. Falls back to OPENROUTER_API_KEY."
+          "description": "Legacy OpenRouter API key setting. Prefer the setup panel, which stores keys in VS Code SecretStorage. Falls back to OPENROUTER_API_KEY."
+        },
+        "aiCommitPromptHelper.huggingFaceApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Legacy Hugging Face token setting. Prefer the setup panel, which stores keys in VS Code SecretStorage. Falls back to HF_TOKEN or HUGGINGFACE_API_KEY."
         },
         "aiCommitPromptHelper.customOpenAiCompatibleBaseUrl": {
           "type": "string",
@@ -298,7 +315,7 @@
   },
   "scripts": {
     "compile": "tsc -p .",
-    "test": "npm run compile",
+    "test": "npm run compile && node dist/selfTest.js",
     "vscode:prepublish": "npm run compile",
     "build": "npm run compile && npm run package:vsix",
     "package:vsix": "npx @vscode/vsce package",
