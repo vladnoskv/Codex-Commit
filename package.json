@@ -2,7 +2,7 @@
   "name": "codex-commit-widget",
   "displayName": "AI Commit & Prompt Helper",
   "description": "Generate structured AI commit messages in VS Code with Codex CLI, OpenRouter, Hugging Face, and OpenAI-compatible LLM APIs.",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "license": "MIT",
   "publisher": "VladNoskov",
   "icon": "media/logo.png",
@@ -82,9 +82,8 @@
       "codexCommitWidget": [
         {
           "id": "codexCommitWidget.sidebar",
-          "name": "Actions",
-          "icon": "media/commit-light.svg",
-          "when": "codexCommitWidget.sidebarEnabled"
+          "name": "Settings",
+          "icon": "media/commit-light.svg"
         }
       ]
     },
@@ -155,11 +154,6 @@
           "type": "string",
           "default": "$(sparkle) AI Commit",
           "description": "Status bar label for the commit generator action."
-        },
-        "codexCommitWidget.enableSidebarAction": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show the AI Helper sidebar action in the Activity Bar."
         },
         "codexCommitWidget.promptTemplate": {
           "type": "string",

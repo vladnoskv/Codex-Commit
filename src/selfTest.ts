@@ -6,6 +6,7 @@ import {
   getDefaultModelForProvider,
   getProviderLabel,
   normalizeGenerationProvider,
+  resolveConfiguredModelForProvider,
   resolveApiKeyValue
 } from "./providers";
 
@@ -36,7 +37,7 @@ function testPackageContributionIdsUseExtensionNamespace(): void {
     contributes: {
       commands: Array<{ command: string }>;
       configuration: { properties: Record<string, unknown> };
-      views: Record<string, Array<{ id: string; icon?: string; when?: string }>>;
+      views: Record<string, Array<{ id: string; icon?: string; name?: string; when?: string }>>;
       viewsContainers: { activitybar: Array<{ id: string }> };
       menus: Record<string, Array<{ command: string }>>;
     };
@@ -65,10 +66,97 @@ function testPackageContributionIdsUseExtensionNamespace(): void {
     "contributed views must include icons for VS Code manifest validation"
   );
   assert.ok(
+    Object.values(packageManifest.contributes.views)
+      .flat()
+      .every((view) => view.when === undefined),
+    "contributed views must not be hidden behind context keys before activation"
+  );
+  assert.ok(
+    Object.values(packageManifest.contributes.views)
+      .flat()
+      .every((view) => view.name === "Settings"),
+    "AI Helper Activity Bar view should be named Settings, not Actions"
+  );
+  assert.ok(
     (packageManifest.activationEvents ?? []).every(
       (event) => !event.startsWith("onCommand:") && !event.startsWith("onView:")
     ),
     "VS Code generates command and view activation events from package contributions"
+  );
+  assert.ok(
+    !Object.prototype.hasOwnProperty.call(
+      packageManifest.contributes.configuration.properties,
+      "codexCommitWidget.enableSidebarAction"
+    ),
+    "sidebar action visibility is no longer configurable because the Activity Bar icon opens settings"
+  );
+}
+
+function testSidebarActionOnlyOpensSettings(): void {
+  const extensionSource = readFileSync(join(__dirname, "extension.js"), "utf8");
+
+  assert.ok(
+    extensionSource.includes("registerWebviewViewProvider(SIDEBAR_VIEW_ID"),
+    "sidebar view should open the settings panel without a tree menu"
+  );
+  assert.ok(
+    !extensionSource.includes("createTreeView(SIDEBAR_VIEW_ID"),
+    "sidebar view should not render a tree menu"
+  );
+  assert.ok(
+    extensionSource.includes("Run Setup Wizard"),
+    "settings panel should expose a setup wizard rerun action"
+  );
+  assert.ok(
+    extensionSource.includes("const allowCustom = mode.provider === \"customOpenAiCompatible\""),
+    "custom model input must be scoped to custom-compatible provider modes"
+  );
+  assert.ok(
+    !extensionSource.includes('new vscode.TreeItem("Generate Commit Message"'),
+    "sidebar should not duplicate generate actions"
+  );
+  assert.ok(
+    !extensionSource.includes('new vscode.TreeItem("Improve Prompt"'),
+    "sidebar should not duplicate prompt actions"
+  );
+}
+
+function testDocsMatchCurrentRelease(): void {
+  const readme = readFileSync(join(__dirname, "..", "README.md"), "utf8");
+  const configuration = readFileSync(join(__dirname, "..", "docs", "configuration.md"), "utf8");
+
+  assert.ok(
+    readme.startsWith("# AI Commit & Prompt Helper v2.0.4"),
+    "README title should describe the current release"
+  );
+  assert.ok(
+    readme.includes("Current extension release: `v2.0.4`."),
+    "README current release line should match the package version"
+  );
+  assert.ok(
+    configuration.includes("Applies to extension release: `v2.0.4`."),
+    "configuration docs should describe the current release"
+  );
+}
+
+function testProviderModelDefaultsStayWithinProvider(): void {
+  assert.equal(PROVIDER_MODE_DEFINITIONS.deepseek.defaultModel, "deepseek-v4-flash");
+  assert.deepEqual(PROVIDER_MODE_DEFINITIONS.deepseek.modelOptions, [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro"
+  ]);
+  assert.equal(
+    resolveConfiguredModelForProvider("deepseek", "gpt-5.4-mini"),
+    "deepseek-v4-flash"
+  );
+  assert.equal(
+    resolveConfiguredModelForProvider("deepseek", "deepseek-v4-pro"),
+    "deepseek-v4-pro"
+  );
+  assert.equal(
+    PROVIDER_MODE_DEFINITIONS.customOpenAiCompatible.defaultModel,
+    "",
+    "custom OpenAI-compatible providers should not inherit a hard-coded model"
   );
 }
 
@@ -132,6 +220,9 @@ function testApiKeyResolutionPrefersSecretsBeforeLegacyAndEnvironment(): void {
 
 testPackageIdentityMatchesMarketplaceExtensionPath();
 testPackageContributionIdsUseExtensionNamespace();
+testSidebarActionOnlyOpensSettings();
+testDocsMatchCurrentRelease();
+testProviderModelDefaultsStayWithinProvider();
 testHuggingFaceProviderMetadata();
 testOpenRouterLowCostPresets();
 testApiKeyResolutionPrefersSecretsBeforeLegacyAndEnvironment();

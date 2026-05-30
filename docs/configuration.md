@@ -2,7 +2,7 @@
 
 This document shows practical `settings.json` examples for **AI Commit & Prompt Helper**.
 
-Applies to extension release: `v2.0.3`.
+Applies to extension release: `v2.0.4`.
 
 ## Visual Preview
 
@@ -17,22 +17,27 @@ Settings examples:
 
 ## Baseline
 
-Run `AI Helper: Open Settings` for the provider-mode setup panel. It writes non-secret
-settings shown below, while hiding controls that are not used by the selected provider.
-API keys entered in the panel are stored in VS Code SecretStorage. Existing key values
-in `settings.json` still work as migration fallbacks.
+Select the **AI Helper** Activity Bar icon to open the settings panel. On first use it
+opens as a setup wizard; after setup is saved, the same icon opens normal settings. Use
+**Run Setup Wizard** in the panel to repeat provider setup later.
+
+The panel writes non-secret settings shown below, while hiding controls that are not used
+by the selected provider. API keys entered in the panel are stored in VS Code
+SecretStorage. Existing key values in `settings.json` still work as migration fallbacks.
 
 ```json
 {
   "codexCommitWidget.provider": "codexCli",
   "codexCommitWidget.codexCommand": "codex",
   "codexCommitWidget.model": "",
-  "codexCommitWidget.reasoningEffort": "low",
-  "codexCommitWidget.enableSidebarAction": true
+  "codexCommitWidget.reasoningEffort": "low"
 }
 ```
 
-Leave `model` empty to use the built-in default for the selected provider.
+Leave `model` empty to use the built-in default for the selected provider. For non-custom
+HTTP providers, the settings panel only saves models from that provider's bundled or
+refreshed model list. Arbitrary custom model IDs are reserved for Codex CLI and custom
+OpenAI-compatible endpoints.
 
 ## Provider Examples
 
@@ -131,6 +136,13 @@ Prefer the setup panel or environment variables for API keys. Environment fallba
 - `HF_TOKEN` or `HUGGINGFACE_API_KEY`
 - `OPENAI_COMPATIBLE_API_KEY`
 
+Model refresh and pricing:
+
+- OpenAI-compatible providers use their `/models` endpoint when available.
+- Anthropic, Cohere, Gemini, Mistral, OpenRouter, Hugging Face, and custom compatible providers are queried through their provider-specific model APIs.
+- Pricing appears only when a provider returns token billing metadata. If pricing is not present, the model still appears without cost text.
+- DeepSeek is restricted to the supported API model names `deepseek-v4-flash` and `deepseek-v4-pro`.
+
 Low-cost provider presets:
 
 - OpenRouter: `openai/gpt-5.2-mini`, `google/gemini-2.5-flash`, `deepseek/deepseek-chat`, `qwen/qwen3-coder`
@@ -142,8 +154,9 @@ Low-cost provider presets:
 
 If Codex CLI is installed globally but not detected in VS Code:
 
-1. Run `AI Helper: Setup Codex CLI` from the Command Palette.
-2. Or use the sidebar action `Setup Codex CLI` in the AI Helper view.
+1. Select the **AI Helper** Activity Bar icon.
+2. Use **Run Setup Wizard**.
+3. Save the detected or manually entered `codexCommitWidget.codexCommand`.
 
 ## Prompt Customization
 
@@ -156,11 +169,11 @@ If Codex CLI is installed globally but not detected in VS Code:
 
 ## Improve Prompt
 
-Run `AI Helper: Improve Prompt` from the Command Palette or the AI Helper sidebar to
-rewrite selected editor text into a clearer coding-agent prompt. If no text is selected,
-the extension asks for prompt text first. It uses the same configured provider, model,
-API key, reasoning effort, and sampling overrides, then opens a review document before
-you copy, open, or replace the result.
+Run `AI Helper: Improve Prompt` from the Command Palette to rewrite selected editor text
+into a clearer coding-agent prompt. If no text is selected, the extension asks for prompt
+text first. It uses the same configured provider, model, API key, reasoning effort, and
+sampling overrides, then opens a review document before you copy, open, or replace the
+result.
 
 ## Sampling Overrides
 

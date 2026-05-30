@@ -1,12 +1,20 @@
-# AI Commit & Prompt Helper v2.0.3
+# AI Commit & Prompt Helper v2.0.4
 
 ![AI Commit & Prompt Helper logo](media/logo.png)
 
 Generate structured, review-friendly AI commit messages from staged Git changes and improve coding prompts in VS Code using Codex CLI, OpenRouter, Hugging Face, and OpenAI-compatible LLM APIs.
 
-Current extension release: `v2.0.3`.
+Current extension release: `v2.0.4`.
 
 ## Release Notes
+
+### v2.0.4
+
+- Replaced the AI Helper sidebar action list with a settings-first view: selecting the Activity Bar icon opens the settings panel instead of showing duplicate commands.
+- Added a setup wizard mode for first-run configuration and a **Run Setup Wizard** button for rerunning provider setup later.
+- Tightened provider/model validation so non-custom providers only save supported model IDs or models returned by their model API.
+- Added model refresh support in the settings UI, including pricing metadata when a provider exposes token billing data.
+- Updated DeepSeek defaults to supported `deepseek-v4-flash` and `deepseek-v4-pro` model names.
 
 ### v2.0.3
 
@@ -42,16 +50,20 @@ Install as a VS Code extension:
 ## Quick Start
 
 1. Open a Git repository in VS Code.
-2. Stage the files you want to commit.
-3. Generate using either entry point:
-   - Source Control title button
-   - Activity Bar -> **AI Helper** -> **Generate Commit Message**
-4. The generated message is written directly into the commit message box.
+2. Select the **AI Helper** Activity Bar icon.
+3. On first use, complete the setup wizard:
+   - Choose the provider you want to use.
+   - Add the required API key or Codex CLI command.
+   - Refresh models when the provider supports model listing.
+   - Review or edit the commit-message prompt.
+   - Save settings.
+4. Stage the files you want to commit.
+5. Generate a commit message from the Source Control title button or the Command Palette command **AI Helper: Generate Commit Message**.
+6. The generated message is written directly into the commit message box.
 
 To improve a coding prompt, select prompt text in an editor and run **AI Helper: Improve Prompt**
-from the Command Palette or Activity Bar -> **AI Helper** -> **Improve Prompt**. If no text is
-selected, the extension asks for a prompt, then shows a review document before you copy,
-open, or replace the improved version.
+from the Command Palette. If no text is selected, the extension asks for a prompt, then
+shows a review document before you copy, open, or replace the improved version.
 
 ## Providers
 
@@ -70,6 +82,11 @@ Set `codexCommitWidget.provider` to one of:
 - `customOpenAiCompatible`
 
 HTTP providers use provider-specific API keys from VS Code SecretStorage when saved through **AI Helper: Open Settings**. Existing `settings.json` API key values and environment variables still work as fallback migration paths.
+
+The settings panel can refresh available models for providers with model-list APIs. It
+also shows token pricing when the provider returns billing metadata. Fallback model lists
+are bundled so setup still works if a provider does not expose model listing or a network
+request fails.
 
 Low-cost presets are included for providers that support broad routing:
 
@@ -91,11 +108,14 @@ Prompt improvement sends only the selected/input prompt text. Absolute local rep
 
 ## Settings
 
-Run **AI Helper: Open Settings** to use the provider-mode setup panel. Each mode shows
-only the settings that the extension maps into that provider's request.
-The panel uses provider/model dropdowns, custom model input, API key visibility toggles,
-and provider-specific validation. API keys entered in the panel are stored in VS Code
-SecretStorage instead of normal settings.
+Select the **AI Helper** Activity Bar icon to open the settings panel. On first use, it
+opens in setup wizard mode. After setup is saved, selecting the icon opens normal settings.
+Use **Run Setup Wizard** in the panel if you want to repeat provider setup later.
+
+Each provider mode shows only the fields used by that provider. Non-custom providers use
+provider-scoped model dropdowns and cannot save arbitrary custom model IDs. The custom
+model input is reserved for Codex CLI and custom OpenAI-compatible endpoints. API keys
+entered in the panel are stored in VS Code SecretStorage instead of normal settings.
 
 Core:
 
@@ -125,7 +145,6 @@ Prompt/style customization:
 UI and usage:
 
 - `codexCommitWidget.statusBarText`
-- `codexCommitWidget.enableSidebarAction`
 - `AI Helper: Improve Prompt`
 - `codexCommitWidget.trackTokenUsageAnalytics`
 - `codexCommitWidget.analyticsRetentionDays`
@@ -159,8 +178,9 @@ Token usage is stored in settings and auto-pruned after `analyticsRetentionDays`
 
 - No repository detected: open a folder/workspace with a Git repo.
 - No staged changes: stage files before generating.
-- Codex command not found: run `AI Helper: Setup Codex CLI` or set `codexCommitWidget.codexCommand`.
+- Codex command not found: open the setup wizard or set `codexCommitWidget.codexCommand`.
 - HTTP provider auth errors: save the key in `AI Helper: Open Settings`, or set the matching environment variable.
+- Wrong model for provider: open settings, refresh models, and save a model from that provider's dropdown.
 - Legacy settings: v2 reads existing `aiCommitPromptHelper.*` values as fallbacks, but new settings should use `codexCommitWidget.*`.
 
 ## License

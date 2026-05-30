@@ -88,7 +88,7 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
     provider: "deepseek",
     label: "DeepSeek",
     defaultModel: "deepseek-v4-flash",
-    modelOptions: ["deepseek-v4-flash", "deepseek-chat"],
+    modelOptions: ["deepseek-v4-flash", "deepseek-v4-pro"],
     apiKeySetting: "deepSeekApiKey",
     apiKeyLabel: "DeepSeek API key",
     apiKeyEnvironment: "DEEPSEEK_API_KEY",
@@ -209,8 +209,8 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
   customOpenAiCompatible: {
     provider: "customOpenAiCompatible",
     label: "Custom OpenAI-Compatible",
-    defaultModel: DEFAULT_MODEL,
-    modelOptions: [DEFAULT_MODEL],
+    defaultModel: "",
+    modelOptions: [],
     apiKeySetting: "customOpenAiCompatibleApiKey",
     apiKeyLabel: "Custom provider API key",
     apiKeyEnvironment: "OPENAI_COMPATIBLE_API_KEY",
@@ -249,6 +249,23 @@ export function normalizeGenerationProvider(value: string): GenerationProvider {
 
 export function getDefaultModelForProvider(provider: GenerationProvider): string {
   return PROVIDER_MODE_DEFINITIONS[provider].defaultModel;
+}
+
+export function resolveConfiguredModelForProvider(
+  provider: GenerationProvider,
+  configuredModel: string
+): string {
+  const definition = PROVIDER_MODE_DEFINITIONS[provider];
+  const trimmed = configuredModel.trim();
+  if (!trimmed) {
+    return definition.defaultModel;
+  }
+
+  if (provider === "customOpenAiCompatible" || provider === "codexCli" || provider === "codexExtensionThenCli") {
+    return trimmed;
+  }
+
+  return definition.modelOptions.includes(trimmed) ? trimmed : definition.defaultModel;
 }
 
 export function getProviderLabel(provider: GenerationProvider): string {

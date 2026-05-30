@@ -14,6 +14,7 @@ import {
   getDefaultModelForProvider,
   getProviderLabel,
   normalizeGenerationProvider,
+  resolveConfiguredModelForProvider,
   resolveApiKeyValue
 } from "./providers";
 
@@ -74,6 +75,15 @@ type ProviderClient = {
   generate(request: TextGenerationRequest): Promise<GeneratedTextResult>;
 };
 
+type ModelCatalogEntry = {
+  id: string;
+  label: string;
+  inputCost: string;
+  outputCost: string;
+  billing: string;
+  source: string;
+};
+
 type TokenUsageMeasurement = {
   inputTokens: number;
   outputTokens: number;
@@ -100,7 +110,6 @@ const LEGACY_IMPROVE_PROMPT_COMMAND_ID = "aiCommitPromptHelper.improvePrompt";
 const LEGACY_SETUP_CODEX_COMMAND_ID = "aiCommitPromptHelper.setupCodexCli";
 const LEGACY_OPEN_SETTINGS_COMMAND_ID = "aiCommitPromptHelper.openSettings";
 const SIDEBAR_VIEW_ID = "codexCommitWidget.sidebar";
-const SIDEBAR_ENABLED_CONTEXT_KEY = "codexCommitWidget.sidebarEnabled";
 const MIN_RECOMMENDED_CODEX_VERSION = "0.120.0";
 const DEFAULT_PROMPT_TEMPLATE =
   "You are generating a git commit message from staged changes. Return only the final commit message text: no preface, no code fences, no markdown wrapper, no explanations outside the commit message. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts directly supported by the staged diff. If validation is not shown in the diff, say not run or not shown rather than inventing it.";
@@ -109,6 +118,8 @@ const BASE_TOOLTIP = "Generate a commit message from staged changes using the se
 const IMPROVE_PROMPT_TOOLTIP = "Improve selected prompt text using the selected AI provider";
 const TOKEN_USAGE_STATE_KEY = "codexCommitWidget.tokenUsageHistory.v1";
 const LEGACY_TOKEN_USAGE_STATE_KEY = "aiCommitPromptHelper.tokenUsageHistory.v1";
+const SETUP_COMPLETE_STATE_KEY = "codexCommitWidget.setupComplete.v1";
+const MODEL_CATALOG_STATE_KEY = "codexCommitWidget.modelCatalog.v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_ANALYTICS_RETENTION_DAYS = 7;
 let hasShownOutdatedCodexVersionWarning = false;
@@ -120,20 +131,16 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.StatusBarAlignment.Left,
     100
   );
-  const sidebarProvider = new SidebarActionProvider();
+  const sidebarProvider = new SidebarSettingsViewProvider(context);
 
   statusBar.command = COMMAND_ID;
   applyStatusBarText(statusBar);
   void updateStatusBarTooltip(context, statusBar);
   void syncTokenUsageAnalyticsSettings(context);
   void autoConfigureCodexCliIfDefault();
-  void updateSidebarVisibilityContext();
   statusBar.show();
 
-  const sidebarView = vscode.window.createTreeView(SIDEBAR_VIEW_ID, {
-    treeDataProvider: sidebarProvider,
-    showCollapseAll: false
-  });
+  const sidebarView = vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, sidebarProvider);
 
   const commandDisposable = vscode.commands.registerCommand(COMMAND_ID, async () => {
     await generateCommitMessage(context, statusBar);
@@ -193,7 +200,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
     applyStatusBarText(statusBar);
     void updateStatusBarTooltip(context, statusBar);
-    void updateSidebarVisibilityContext();
   });
 
   context.subscriptions.push(
@@ -237,52 +243,117 @@ function isAlreadyRegisteredCommandError(error: unknown): boolean {
   return error instanceof Error && /command .* already registered/i.test(error.message);
 }
 
-class SidebarActionProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
-  getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
-    return element;
+class SidebarSettingsViewProvider implements vscode.WebviewViewProvider {
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  resolveWebviewView(webviewView: vscode.WebviewView): void {
+    webviewView.webview.options = { enableScripts: true };
+    webviewView.webview.html = renderSidebarViewHtml(webviewView.webview);
+    webviewView.webview.onDidReceiveMessage(
+      async (message: unknown) => {
+        if (!message || typeof message !== "object") {
+          return;
+        }
+
+        const type = (message as Record<string, unknown>).type;
+        if (type === "openSettings") {
+          await openProviderModeSettingsPanel(this.context, {
+            setupMode: !isSetupComplete(this.context)
+          });
+        }
+        if (type === "runSetup") {
+          await openProviderModeSettingsPanel(this.context, { setupMode: true });
+        }
+      },
+      undefined,
+      this.context.subscriptions
+    );
+    webviewView.onDidChangeVisibility(
+      () => {
+        if (webviewView.visible) {
+          void this.openSettingsForCurrentState();
+        }
+      },
+      undefined,
+      this.context.subscriptions
+    );
+
+    void this.openSettingsForCurrentState();
   }
 
-  getChildren(): vscode.ProviderResult<vscode.TreeItem[]> {
-    const generateItem = new vscode.TreeItem(
-      "Generate Commit Message",
-      vscode.TreeItemCollapsibleState.None
-    );
-    generateItem.command = {
-      command: COMMAND_ID,
-      title: "Generate Commit Message"
-    };
-    generateItem.iconPath = new vscode.ThemeIcon("sparkle");
-    generateItem.tooltip = BASE_TOOLTIP;
-
-    const improvePromptItem = new vscode.TreeItem(
-      "Improve Prompt",
-      vscode.TreeItemCollapsibleState.None
-    );
-    improvePromptItem.command = {
-      command: IMPROVE_PROMPT_COMMAND_ID,
-      title: "Improve Prompt"
-    };
-    improvePromptItem.iconPath = new vscode.ThemeIcon("wand");
-    improvePromptItem.tooltip = IMPROVE_PROMPT_TOOLTIP;
-
-    const setupItem = new vscode.TreeItem("Setup Codex CLI", vscode.TreeItemCollapsibleState.None);
-    setupItem.command = {
-      command: SETUP_CODEX_COMMAND_ID,
-      title: "Setup Codex CLI"
-    };
-    setupItem.iconPath = new vscode.ThemeIcon("tools");
-    setupItem.tooltip = "Detect Codex CLI path and save it to extension settings";
-
-    const settingsItem = new vscode.TreeItem("Open Settings", vscode.TreeItemCollapsibleState.None);
-    settingsItem.command = {
-      command: OPEN_SETTINGS_COMMAND_ID,
-      title: "Open Settings"
-    };
-    settingsItem.iconPath = new vscode.ThemeIcon("gear");
-    settingsItem.tooltip = "Open AI Commit & Prompt Helper settings";
-
-    return [generateItem, improvePromptItem, setupItem, settingsItem];
+  private async openSettingsForCurrentState(): Promise<void> {
+    await openProviderModeSettingsPanel(this.context, {
+      setupMode: !isSetupComplete(this.context)
+    });
   }
+}
+
+function renderSidebarViewHtml(webview: vscode.Webview): string {
+  const nonce = createNonce();
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Helper</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 12px;
+      color: var(--vscode-foreground);
+      background: var(--vscode-sideBar-background);
+      font: 13px/1.4 var(--vscode-font-family);
+    }
+    main { display: grid; gap: 10px; }
+    p {
+      margin: 0;
+      color: var(--vscode-descriptionForeground);
+    }
+    button {
+      width: 100%;
+      min-height: 30px;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      padding: 5px 8px;
+      color: var(--vscode-button-foreground);
+      background: var(--vscode-button-background);
+      cursor: pointer;
+      font: inherit;
+    }
+    button.secondary {
+      color: var(--vscode-button-secondaryForeground);
+      background: var(--vscode-button-secondaryBackground);
+      border-color: var(--vscode-panel-border);
+    }
+    button:hover { background: var(--vscode-button-hoverBackground); }
+    button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+    button:focus {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: 1px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p>The settings panel opens in the editor when this view is selected.</p>
+    <button type="button" id="openSettings">Open Settings</button>
+    <button class="secondary" type="button" id="runSetup">Run Setup Wizard</button>
+  </main>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi();
+    document.getElementById("openSettings").addEventListener("click", () => {
+      vscode.postMessage({ type: "openSettings" });
+    });
+    document.getElementById("runSetup").addEventListener("click", () => {
+      vscode.postMessage({ type: "runSetup" });
+    });
+    vscode.postMessage({ type: "openSettings" });
+  </script>
+</body>
+</html>`;
 }
 
 async function setupCodexCliCommand(context: vscode.ExtensionContext): Promise<void> {
@@ -308,16 +379,30 @@ async function setupCodexCliCommand(context: vscode.ExtensionContext): Promise<v
   );
 }
 
-async function openCodexWidgetSettings(context: vscode.ExtensionContext): Promise<void> {
-  await openProviderModeSettingsPanel(context);
+function isSetupComplete(context: vscode.ExtensionContext): boolean {
+  return context.globalState.get<boolean>(SETUP_COMPLETE_STATE_KEY, false);
 }
 
-async function openProviderModeSettingsPanel(context: vscode.ExtensionContext): Promise<void> {
+function hasExplicitProviderConfiguration(): boolean {
+  return (
+    hasExplicitConfigurationValue(vscode.workspace.getConfiguration(CONFIG_SECTION), "provider") ||
+    hasExplicitConfigurationValue(vscode.workspace.getConfiguration(LEGACY_CONFIG_SECTION), "provider")
+  );
+}
+
+async function openCodexWidgetSettings(context: vscode.ExtensionContext): Promise<void> {
+  await openProviderModeSettingsPanel(context, { setupMode: !isSetupComplete(context) });
+}
+
+async function openProviderModeSettingsPanel(
+  context: vscode.ExtensionContext,
+  options: { setupMode?: boolean } = {}
+): Promise<void> {
   if (settingsPanel) {
     settingsPanel.reveal(vscode.ViewColumn.Active);
     settingsPanel.webview.postMessage({
       type: "state",
-      state: await readSettingsPanelState(context.secrets)
+      state: await readSettingsPanelState(context, Boolean(options.setupMode))
     });
     return;
   }
@@ -357,8 +442,10 @@ async function openProviderModeSettingsPanel(context: vscode.ExtensionContext): 
 }
 
 async function readSettingsPanelState(
-  secrets: vscode.SecretStorage
+  context: vscode.ExtensionContext,
+  setupMode: boolean
 ): Promise<Record<string, unknown>> {
+  const secrets = context.secrets;
   const provider = normalizeGenerationProvider(
     getConfiguredValue<string>("provider", "codexCli")
   );
@@ -378,6 +465,8 @@ async function readSettingsPanelState(
     apiKeyConfigured: await hasGenericApiKeyConfigured(secrets),
     apiKeys: {},
     providerApiKeysConfigured,
+    setupMode,
+    modelCatalog: readModelCatalog(context),
     customOpenAiCompatibleBaseUrl: getConfiguredValue<string>(
       "customOpenAiCompatibleBaseUrl",
       ""
@@ -407,13 +496,32 @@ async function handleSettingsPanelMessage(
   if (record.type === "ready") {
     await panel.webview.postMessage({
       type: "state",
-      state: await readSettingsPanelState(context.secrets)
+      state: await readSettingsPanelState(context, !isSetupComplete(context))
     });
     return;
   }
 
   if (record.type === "openNativeSettings") {
     await vscode.commands.executeCommand("workbench.action.openSettings", CONFIG_SECTION);
+    return;
+  }
+
+  if (record.type === "runSetup") {
+    await panel.webview.postMessage({
+      type: "state",
+      state: await readSettingsPanelState(context, true)
+    });
+    return;
+  }
+
+  if (record.type === "refreshModels") {
+    const values = record.values && typeof record.values === "object"
+      ? (record.values as Record<string, unknown>)
+      : {};
+    const provider = normalizeGenerationProvider(String(values.provider ?? "codexCli"));
+    const entries = await fetchAvailableModelsForPanel(provider, values, context);
+    await updateModelCatalog(context, provider, entries);
+    await panel.webview.postMessage({ type: "models", provider, models: entries });
     return;
   }
 
@@ -425,7 +533,7 @@ async function handleSettingsPanelMessage(
   const provider = normalizeGenerationProvider(String(values.provider ?? "codexCli"));
   const mode = PROVIDER_MODE_DEFINITIONS[provider];
   const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
-  const validationError = validateSettingsPanelValues(mode, values);
+  const validationError = validateSettingsPanelValues(mode, values, context);
   if (validationError) {
     void vscode.window.showErrorMessage(validationError);
     await panel.webview.postMessage({ type: "error", message: validationError });
@@ -433,7 +541,11 @@ async function handleSettingsPanelMessage(
   }
 
   await updateSettingIfChanged(config, "provider", provider);
-  await updateSettingIfChanged(config, "model", asString(values.model));
+  await updateSettingIfChanged(
+    config,
+    "model",
+    normalizeModelForSave(provider, asString(values.model), context)
+  );
   await updateSettingIfChanged(config, "maxDiffChars", normalizePositiveInteger(asNumber(values.maxDiffChars), 120000));
   await updateSettingIfChanged(config, "promptTemplate", asString(values.promptTemplate) || DEFAULT_PROMPT_TEMPLATE);
   await updateSettingIfChanged(
@@ -506,23 +618,33 @@ async function handleSettingsPanelMessage(
     );
   }
 
+  await context.globalState.update(SETUP_COMPLETE_STATE_KEY, true);
   void vscode.window.showInformationMessage("AI Helper settings saved.");
   await panel.webview.postMessage({
     type: "state",
-    state: await readSettingsPanelState(context.secrets)
+    state: await readSettingsPanelState(context, false)
   });
   await panel.webview.postMessage({ type: "saved" });
 }
 
 function validateSettingsPanelValues(
   mode: ProviderModeDefinition,
-  values: Record<string, unknown>
+  values: Record<string, unknown>,
+  context: vscode.ExtensionContext
 ): string {
   if (mode.requiresCustomBaseUrl && !asString(values.customOpenAiCompatibleBaseUrl)) {
     return "Base URL is required for the custom OpenAI-compatible provider.";
   }
   if (mode.requiresCodexCommand && !asString(values.codexCommand)) {
     return "Codex command is required for Codex modes.";
+  }
+  const provider = mode.provider;
+  const model = asString(values.model);
+  if (provider === "customOpenAiCompatible" && !model) {
+    return "Choose or enter a model ID for the custom OpenAI-compatible provider.";
+  }
+  if (!isAllowedModelSelection(provider, model, context)) {
+    return `${mode.label} requires a model from its model list. Refresh models or choose a listed fallback model.`;
   }
   if (normalizePositiveInteger(asNumber(values.maxDiffChars), 0) <= 0) {
     return "Max diff characters must be a positive number.";
@@ -553,6 +675,138 @@ function validateSettingsPanelValues(
     return "Max output tokens must be a positive whole number.";
   }
   return "";
+}
+
+function buildStaticModelCatalog(): Record<GenerationProvider, ModelCatalogEntry[]> {
+  return Object.fromEntries(
+    Object.values(PROVIDER_MODE_DEFINITIONS).map((mode) => [
+      mode.provider,
+      mode.modelOptions.map((model) => ({
+        id: model,
+        label: model,
+        inputCost: "",
+        outputCost: "",
+        billing: "",
+        source: "Bundled fallback"
+      }))
+    ])
+  ) as Record<GenerationProvider, ModelCatalogEntry[]>;
+}
+
+function readModelCatalog(
+  context: vscode.ExtensionContext
+): Record<GenerationProvider, ModelCatalogEntry[]> {
+  const staticCatalog = buildStaticModelCatalog();
+  const stored = context.globalState.get<unknown>(MODEL_CATALOG_STATE_KEY);
+  if (!stored || typeof stored !== "object") {
+    return staticCatalog;
+  }
+
+  const result = { ...staticCatalog };
+  for (const mode of Object.values(PROVIDER_MODE_DEFINITIONS)) {
+    const entries = (stored as Record<string, unknown>)[mode.provider];
+    if (!Array.isArray(entries)) {
+      continue;
+    }
+    const normalized = entries
+      .map(normalizeModelCatalogEntry)
+      .filter((entry): entry is ModelCatalogEntry => entry !== null);
+    if (normalized.length > 0) {
+      result[mode.provider] = normalized;
+    }
+  }
+  return result;
+}
+
+function normalizeModelCatalogEntry(value: unknown): ModelCatalogEntry | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const id = asString(record.id);
+  if (!id) {
+    return null;
+  }
+  return {
+    id,
+    label: asString(record.label) || id,
+    inputCost: asString(record.inputCost),
+    outputCost: asString(record.outputCost),
+    billing: asString(record.billing),
+    source: asString(record.source) || "Provider API"
+  };
+}
+
+async function updateModelCatalog(
+  context: vscode.ExtensionContext,
+  provider: GenerationProvider,
+  entries: ModelCatalogEntry[]
+): Promise<void> {
+  if (entries.length === 0) {
+    return;
+  }
+  const current = readModelCatalog(context);
+  current[provider] = entries;
+  await context.globalState.update(MODEL_CATALOG_STATE_KEY, current);
+}
+
+function isAllowedModelSelection(
+  provider: GenerationProvider,
+  model: string,
+  context: vscode.ExtensionContext
+): boolean {
+  if (!model) {
+    return true;
+  }
+  if (provider === "customOpenAiCompatible" || provider === "codexCli" || provider === "codexExtensionThenCli") {
+    return true;
+  }
+
+  return getAllowedProviderModelIds(provider, context).has(model);
+}
+
+function normalizeModelForSave(
+  provider: GenerationProvider,
+  model: string,
+  context: vscode.ExtensionContext
+): string {
+  if (!model) {
+    return "";
+  }
+  if (isAllowedModelSelection(provider, model, context)) {
+    return model;
+  }
+  return getDefaultModelForProvider(provider);
+}
+
+function resolveModelForGeneration(
+  provider: GenerationProvider,
+  configuredModel: string,
+  context: vscode.ExtensionContext
+): string {
+  const model = configuredModel.trim();
+  if (!model) {
+    return getDefaultModelForProvider(provider);
+  }
+  if (provider === "customOpenAiCompatible" || provider === "codexCli" || provider === "codexExtensionThenCli") {
+    return model;
+  }
+  if (getAllowedProviderModelIds(provider, context).has(model)) {
+    return model;
+  }
+  return resolveConfiguredModelForProvider(provider, model);
+}
+
+function getAllowedProviderModelIds(
+  provider: GenerationProvider,
+  context: vscode.ExtensionContext
+): Set<string> {
+  const catalog = readModelCatalog(context);
+  const ids = new Set((catalog[provider] ?? []).map((entry) => entry.id));
+  for (const model of PROVIDER_MODE_DEFINITIONS[provider].modelOptions) {
+    ids.add(model);
+  }
+  return ids;
 }
 
 async function updateSettingIfChanged(
@@ -693,6 +947,42 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       gap: 10px;
       align-items: end;
     }
+    .header-actions,
+    .nav-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .nav-tabs {
+      justify-content: flex-start;
+    }
+    .nav-tab {
+      min-height: 28px;
+      padding: 4px 9px;
+    }
+    .callout {
+      border: 1px solid var(--focus);
+      border-radius: 8px;
+      padding: 12px 14px;
+      background: color-mix(in srgb, var(--focus) 12%, transparent);
+    }
+    .callout strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+    .model-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+    }
+    .model-meta {
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
     button {
       min-height: 30px;
       border: 1px solid var(--border);
@@ -817,6 +1107,7 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
     @media (max-width: 720px) {
       body { padding: 14px; }
       header,
+      .header-actions,
       .actions { flex-direction: column; align-items: stretch; }
       .toolbar { grid-template-columns: 1fr; }
       .grid { grid-template-columns: 1fr; }
@@ -830,10 +1121,25 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
     <header>
       <div>
         <h1>AI Helper Settings</h1>
-        <div class="hint" id="modeSummary"></div>
+        <div class="hint" id="modeSummary">Choose how AI Helper generates commit messages and prompt rewrites.</div>
       </div>
-      <button class="secondary" type="button" id="nativeSettings">VS Code Settings</button>
+      <div class="header-actions">
+        <button class="secondary" type="button" id="runSetup">Run Setup Wizard</button>
+        <button class="secondary" type="button" id="nativeSettings">VS Code Settings</button>
+      </div>
     </header>
+
+    <section class="callout hidden" id="setupCallout">
+      <strong>Setup wizard</strong>
+      <div class="hint">Choose a provider, add the required key or command, refresh models when available, review the prompt, then save.</div>
+    </section>
+
+    <nav class="nav-tabs" aria-label="Settings sections">
+      <button class="secondary nav-tab" type="button" data-scroll-target="providerSection">Provider</button>
+      <button class="secondary nav-tab" type="button" data-scroll-target="promptSection">Prompt</button>
+      <button class="secondary nav-tab" type="button" data-scroll-target="generationSection">Generation</button>
+      <button class="secondary nav-tab" type="button" data-scroll-target="usageSection">Usage</button>
+    </nav>
 
     <div class="toolbar">
       <label>
@@ -845,14 +1151,18 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
     </div>
 
     <form id="settingsForm" class="grid">
-      <section>
-        <h2>Provider</h2>
-        <label>
-          <span class="label-row"><span>Model</span><span class="hint" id="modelDefault"></span></span>
-          <select id="modelChoice" name="modelChoice"></select>
-        </label>
+      <section id="providerSection">
+        <h2>Provider and model</h2>
+        <div class="model-row">
+          <label>
+            <span class="label-row"><span>Model</span><span class="hint" id="modelDefault"></span></span>
+            <select id="modelChoice" name="modelChoice"></select>
+          </label>
+          <button class="secondary" type="button" id="refreshModels">Refresh Models</button>
+        </div>
+        <div class="model-meta" id="modelMetadata"></div>
         <label id="customModelField">
-          <span>Custom model ID</span>
+          <span>Custom provider model ID</span>
           <input id="model" name="model" type="text" autocomplete="off">
         </label>
         <label id="codexCommandField">
@@ -870,7 +1180,7 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       </section>
 
       <section id="authSection">
-        <h2>Authentication</h2>
+        <h2>API keys</h2>
         <label>
           <span class="label-row"><span id="providerApiKeyLabel">Provider API key</span><span class="hint" id="providerApiKeyHint"></span></span>
           <span class="secret-field">
@@ -907,7 +1217,7 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       </section>
 
       <section id="samplingSection">
-        <h2>Sampling</h2>
+        <h2>Generation controls</h2>
         <label>
           <span>Temperature</span>
           <input id="temperatureOverride" name="temperatureOverride" type="number" min="0" max="2" step="0.1">
@@ -922,7 +1232,7 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
         </label>
       </section>
 
-      <section class="wide">
+      <section class="wide" id="promptSection">
         <h2>Prompt</h2>
         <label>
           <span>Prompt template</span>
@@ -934,7 +1244,7 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
         </label>
       </section>
 
-      <section>
+      <section id="generationSection">
         <h2>Limits</h2>
         <label>
           <span>Max diff characters</span>
@@ -942,8 +1252,8 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
         </label>
       </section>
 
-      <section>
-        <h2>Analytics</h2>
+      <section id="usageSection">
+        <h2>Usage analytics</h2>
         <label class="inline">
           <input id="trackTokenUsageAnalytics" name="trackTokenUsageAnalytics" type="checkbox">
           <span>Track token usage</span>
@@ -971,14 +1281,20 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       apiKeys: {},
       apiKeyConfigured: false,
       providerApiKeysConfigured: {},
+      modelCatalog: {},
+      setupMode: false,
       secretVisibility: Object.assign({ providerApiKey: false, apiKey: false }, persistedUiState.secretVisibility || {})
     };
 
     const controls = {
+      setupCallout: document.getElementById("setupCallout"),
       providerSelect: document.getElementById("providerSelect"),
       modeSummary: document.getElementById("modeSummary"),
+      runSetup: document.getElementById("runSetup"),
       modelDefault: document.getElementById("modelDefault"),
       modelChoice: document.getElementById("modelChoice"),
+      refreshModels: document.getElementById("refreshModels"),
+      modelMetadata: document.getElementById("modelMetadata"),
       customModelField: document.getElementById("customModelField"),
       model: document.getElementById("model"),
       codexCommandField: document.getElementById("codexCommandField"),
@@ -1010,7 +1326,9 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       Object.assign(state, nextState);
       state.apiKeys = Object.assign({}, nextState.apiKeys || {});
       state.providerApiKeysConfigured = Object.assign({}, nextState.providerApiKeysConfigured || {});
+      state.modelCatalog = Object.assign({}, state.modelCatalog || {}, nextState.modelCatalog || {});
       controls.providerSelect.value = state.provider || "codexCli";
+      controls.setupCallout.classList.toggle("hidden", !state.setupMode);
       controls.codexCommand.value = state.codexCommand || "codex";
       controls.codexExtensionCommand.value = state.codexExtensionCommand || "";
       controls.model.value = state.model || "";
@@ -1037,9 +1355,11 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
 
     function renderMode() {
       const mode = modes[state.provider] || modes.codexCli;
-      controls.modeSummary.textContent = mode.label;
+      controls.modeSummary.textContent = "Current provider: " + mode.label;
       controls.providerSelect.value = mode.provider;
-      controls.modelDefault.textContent = "Default: " + mode.defaultModel;
+      controls.modelDefault.textContent = mode.defaultModel
+        ? "Default: " + mode.defaultModel
+        : "Choose a model";
       renderModelChoices(mode);
       controls.codexCommandField.classList.toggle("hidden", !mode.requiresCodexCommand);
       controls.codexExtensionCommandField.classList.toggle("hidden", !mode.requiresCodexExtensionCommand);
@@ -1052,33 +1372,87 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       controls.providerApiKeyHint.textContent = [mode.apiKeyEnvironment || "", configured ? "configured" : ""].filter(Boolean).join(" | ");
       controls.providerApiKey.value = state.apiKeys[state.provider] || "";
       controls.providerApiKey.placeholder = configured ? "Configured" : "";
+      controls.refreshModels.disabled = mode.provider === "codexCli" || mode.provider === "codexExtensionThenCli";
     }
 
     function renderModelChoices(mode) {
       const configuredModel = controls.model.value.trim();
-      const knownModels = Array.from(new Set([mode.defaultModel].concat(mode.modelOptions || [])));
+      const catalog = state.modelCatalog[mode.provider] || [];
+      const entriesById = new Map();
+      [mode.defaultModel].concat(mode.modelOptions || []).filter(Boolean).forEach((model) => {
+        entriesById.set(model, {
+          id: model,
+          label: model,
+          inputCost: "",
+          outputCost: "",
+          billing: "",
+          source: "Bundled fallback"
+        });
+      });
+      catalog.forEach((entry) => {
+        if (entry && entry.id) {
+          entriesById.set(entry.id, entry);
+        }
+      });
+      const entries = Array.from(entriesById.values());
+      const knownModels = entries.map((entry) => entry.id);
+      const allowCustom = mode.provider === "customOpenAiCompatible" || mode.provider === "codexCli" || mode.provider === "codexExtensionThenCli";
       controls.modelChoice.replaceChildren();
       controls.modelChoice.appendChild(new Option("Use provider default", ""));
-      knownModels.forEach((model) => {
-        controls.modelChoice.appendChild(new Option(model, model));
+      entries.forEach((entry) => {
+        controls.modelChoice.appendChild(new Option(formatModelOption(entry), entry.id));
       });
-      controls.modelChoice.appendChild(new Option("Custom model ID", "__custom"));
+      if (allowCustom) {
+        controls.modelChoice.appendChild(new Option("Custom model ID", "__custom"));
+      }
 
       if (!configuredModel) {
         controls.modelChoice.value = "";
         controls.customModelField.classList.add("hidden");
-        controls.model.placeholder = mode.defaultModel;
+        controls.model.placeholder = mode.defaultModel || "Provider model ID";
+        renderSelectedModelMetadata(mode, "");
         return;
       }
 
       if (knownModels.includes(configuredModel)) {
         controls.modelChoice.value = configuredModel;
         controls.customModelField.classList.add("hidden");
-      } else {
+      } else if (allowCustom) {
         controls.modelChoice.value = "__custom";
         controls.customModelField.classList.remove("hidden");
+      } else {
+        controls.model.value = "";
+        controls.modelChoice.value = "";
+        controls.customModelField.classList.add("hidden");
       }
-      controls.model.placeholder = mode.defaultModel;
+      controls.model.placeholder = mode.defaultModel || "Provider model ID";
+      renderSelectedModelMetadata(mode, controls.modelChoice.value);
+    }
+
+    function formatModelOption(entry) {
+      const parts = [entry.label || entry.id];
+      const cost = [entry.inputCost ? "in " + entry.inputCost : "", entry.outputCost ? "out " + entry.outputCost : ""].filter(Boolean).join(", ");
+      if (cost) {
+        parts.push(" - " + cost);
+      }
+      return parts.join("");
+    }
+
+    function renderSelectedModelMetadata(mode, selected) {
+      const modelId = selected && selected !== "__custom" ? selected : "";
+      const entry = (state.modelCatalog[mode.provider] || []).find((item) => item.id === modelId);
+      if (!entry) {
+        controls.modelMetadata.textContent = mode.provider === "customOpenAiCompatible"
+          ? "Custom providers can use a listed model or a custom model ID."
+          : "Refresh models to load the provider's current model list.";
+        return;
+      }
+      controls.modelMetadata.textContent = [
+        entry.source,
+        entry.inputCost ? "Input " + entry.inputCost : "",
+        entry.outputCost ? "Output " + entry.outputCost : "",
+        entry.billing || ""
+      ].filter(Boolean).join(" | ");
     }
 
     function rememberProviderKey() {
@@ -1090,6 +1464,39 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
 
     function nullableNumber(control) {
       return control.value.trim() === "" ? null : Number(control.value);
+    }
+
+    function collectSettingsValues() {
+      return {
+        provider: state.provider,
+        codexCommand: controls.codexCommand.value,
+        codexExtensionCommand: controls.codexExtensionCommand.value,
+        model: controls.model.value,
+        apiKey: controls.apiKey.value,
+        providerApiKey: controls.providerApiKey.value,
+        customOpenAiCompatibleBaseUrl: controls.customOpenAiCompatibleBaseUrl.value,
+        reasoningEffort: controls.reasoningEffort.value,
+        maxDiffChars: Number(controls.maxDiffChars.value),
+        promptTemplate: controls.promptTemplate.value,
+        additionalPromptInstructions: controls.additionalPromptInstructions.value,
+        temperatureOverride: nullableNumber(controls.temperatureOverride),
+        topPOverride: nullableNumber(controls.topPOverride),
+        maxOutputTokensOverride: nullableNumber(controls.maxOutputTokensOverride),
+        trackTokenUsageAnalytics: controls.trackTokenUsageAnalytics.checked,
+        analyticsRetentionDays: Number(controls.analyticsRetentionDays.value)
+      };
+    }
+
+    function requestModelRefresh() {
+      rememberProviderKey();
+      const mode = modes[state.provider] || modes.codexCli;
+      if (mode.provider === "codexCli" || mode.provider === "codexExtensionThenCli") {
+        renderMode();
+        return;
+      }
+      setStatus("Refreshing models...");
+      controls.refreshModels.disabled = true;
+      vscode.postMessage({ type: "refreshModels", values: collectSettingsValues() });
     }
 
     function setStatus(message, isError) {
@@ -1140,6 +1547,7 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       controls.model.value = "";
       setStatus("");
       renderMode();
+      requestModelRefresh();
     });
 
     controls.modelChoice.addEventListener("change", () => {
@@ -1151,6 +1559,11 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
         controls.model.value = selected;
         controls.customModelField.classList.add("hidden");
       }
+      renderSelectedModelMetadata(modes[state.provider] || modes.codexCli, selected);
+    });
+
+    controls.refreshModels.addEventListener("click", () => {
+      requestModelRefresh();
     });
 
     document.querySelectorAll("[data-toggle-secret]").forEach((button) => {
@@ -1165,6 +1578,22 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       vscode.postMessage({ type: "openNativeSettings" });
     });
 
+    controls.runSetup.addEventListener("click", () => {
+      state.setupMode = true;
+      controls.setupCallout.classList.remove("hidden");
+      setStatus("Setup wizard reopened. Review provider, model, API key, and prompt settings, then save.");
+      vscode.postMessage({ type: "runSetup" });
+    });
+
+    document.querySelectorAll("[data-scroll-target]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const target = document.getElementById(button.getAttribute("data-scroll-target"));
+        if (target) {
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      });
+    });
+
     document.getElementById("settingsForm").addEventListener("submit", (event) => {
       event.preventDefault();
       rememberProviderKey();
@@ -1176,24 +1605,7 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       setStatus("Saving settings...");
       vscode.postMessage({
         type: "save",
-        values: {
-          provider: state.provider,
-          codexCommand: controls.codexCommand.value,
-          codexExtensionCommand: controls.codexExtensionCommand.value,
-          model: controls.model.value,
-          apiKey: controls.apiKey.value,
-          providerApiKey: controls.providerApiKey.value,
-          customOpenAiCompatibleBaseUrl: controls.customOpenAiCompatibleBaseUrl.value,
-          reasoningEffort: controls.reasoningEffort.value,
-          maxDiffChars: Number(controls.maxDiffChars.value),
-          promptTemplate: controls.promptTemplate.value,
-          additionalPromptInstructions: controls.additionalPromptInstructions.value,
-          temperatureOverride: nullableNumber(controls.temperatureOverride),
-          topPOverride: nullableNumber(controls.topPOverride),
-          maxOutputTokensOverride: nullableNumber(controls.maxOutputTokensOverride),
-          trackTokenUsageAnalytics: controls.trackTokenUsageAnalytics.checked,
-          analyticsRetentionDays: Number(controls.analyticsRetentionDays.value)
-        }
+        values: collectSettingsValues()
       });
     });
 
@@ -1204,7 +1616,14 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       if (event.data && event.data.type === "saved") {
         setStatus("Settings saved.");
       }
+      if (event.data && event.data.type === "models") {
+        state.modelCatalog[event.data.provider] = event.data.models || [];
+        controls.refreshModels.disabled = false;
+        renderMode();
+        setStatus("Models refreshed.");
+      }
       if (event.data && event.data.type === "error") {
+        controls.refreshModels.disabled = false;
         setStatus(event.data.message || "Could not save settings.", true);
       }
     });
@@ -1256,10 +1675,26 @@ async function autoConfigureCodexCliIfDefault(): Promise<void> {
   await config.update("codexCommand", discovered.command, vscode.ConfigurationTarget.Global);
 }
 
+async function promptForSetupIfNeeded(context: vscode.ExtensionContext): Promise<boolean> {
+  if (isSetupComplete(context) || hasExplicitProviderConfiguration()) {
+    return false;
+  }
+
+  void vscode.window.showInformationMessage(
+    "Choose an AI provider and model before generating with AI Helper."
+  );
+  await openProviderModeSettingsPanel(context, { setupMode: true });
+  return true;
+}
+
 async function generateCommitMessage(
   context: vscode.ExtensionContext,
   statusBar: vscode.StatusBarItem
 ): Promise<void> {
+  if (await promptForSetupIfNeeded(context)) {
+    return;
+  }
+
   const gitExtension = vscode.extensions.getExtension("vscode.git");
   if (!gitExtension) {
     void vscode.window.showErrorMessage("Built-in Git extension is not available.");
@@ -1289,7 +1724,7 @@ async function generateCommitMessage(
     return;
   }
 
-  const settings = await readGenerationSettings(context.secrets);
+  const settings = await readGenerationSettings(context);
 
   try {
     await vscode.window.withProgress(
@@ -1357,12 +1792,16 @@ async function generateCommitMessage(
 }
 
 async function improvePrompt(context: vscode.ExtensionContext): Promise<void> {
+  if (await promptForSetupIfNeeded(context)) {
+    return;
+  }
+
   const source = await getPromptImprovementSource();
   if (!source) {
     return;
   }
 
-  const settings = await readGenerationSettings(context.secrets);
+  const settings = await readGenerationSettings(context);
   const cwd = getPromptImprovementCwd(source.editor);
 
   try {
@@ -1626,18 +2065,6 @@ function applyStatusBarText(statusBar: vscode.StatusBarItem): void {
   statusBar.text = configured || DEFAULT_STATUS_BAR_TEXT;
 }
 
-function isSidebarActionEnabled(): boolean {
-  return getConfiguredValue<boolean>("enableSidebarAction", true);
-}
-
-async function updateSidebarVisibilityContext(): Promise<void> {
-  await vscode.commands.executeCommand(
-    "setContext",
-    SIDEBAR_ENABLED_CONTEXT_KEY,
-    isSidebarActionEnabled()
-  );
-}
-
 async function updateStatusBarTooltip(
   _context: vscode.ExtensionContext,
   statusBar: vscode.StatusBarItem
@@ -1648,7 +2075,8 @@ async function updateStatusBarTooltip(
     "AI Commit & Prompt Helper > Analytics";
 }
 
-async function readGenerationSettings(secrets: vscode.SecretStorage): Promise<GenerationSettings> {
+async function readGenerationSettings(context: vscode.ExtensionContext): Promise<GenerationSettings> {
+  const secrets = context.secrets;
   const provider = normalizeGenerationProvider(
     getConfiguredValue<string>("provider", "codexCli")
   );
@@ -1664,7 +2092,7 @@ async function readGenerationSettings(secrets: vscode.SecretStorage): Promise<Ge
     provider,
     codexExtensionCommand: getConfiguredValue<string>("codexExtensionCommand", "").trim(),
     codexCommand: getConfiguredValue<string>("codexCommand", "codex"),
-    model: configuredModel || getDefaultModelForProvider(provider),
+    model: resolveModelForGeneration(provider, configuredModel, context),
     apiKey: await getSecretValue(secrets, GENERIC_API_KEY_SECRET_KEY),
     legacyApiKey: getConfiguredValue<string>("apiKey", "").trim(),
     openAiApiKey: providerSecrets.openai || getConfiguredValue<string>("openAiApiKey", "").trim(),
@@ -1988,6 +2416,256 @@ function getProviderClient(provider: GenerationProvider): ProviderClient {
         generate: generateWithGemini
       };
   }
+}
+
+async function fetchAvailableModelsForPanel(
+  provider: GenerationProvider,
+  values: Record<string, unknown>,
+  context: vscode.ExtensionContext
+): Promise<ModelCatalogEntry[]> {
+  const mode = PROVIDER_MODE_DEFINITIONS[provider];
+  if (provider === "codexCli" || provider === "codexExtensionThenCli") {
+    return buildStaticModelCatalog()[provider];
+  }
+
+  const apiKey = await resolvePanelApiKey(provider, values, context.secrets);
+  if (!apiKey) {
+    throw new Error(getMissingApiKeyMessage(provider));
+  }
+
+  switch (provider) {
+    case "openai":
+    case "deepseek":
+    case "mistral":
+    case "openrouter":
+    case "huggingface":
+    case "customOpenAiCompatible": {
+      const baseUrl = getOpenAiCompatibleBaseUrlForModels(provider, values);
+      if (!baseUrl) {
+        throw new Error(
+          "Set codexCommitWidget.customOpenAiCompatibleBaseUrl before refreshing models."
+        );
+      }
+      const json = await getJson(
+        `${baseUrl.replace(/\/+$/g, "")}/models`,
+        buildOpenAiCompatibleHeaders(provider, apiKey),
+        mode.label
+      );
+      return mergeStaticModelFallbacks(
+        provider,
+        extractOpenAiCompatibleModelEntries(provider, json, mode.label)
+      );
+    }
+    case "anthropic": {
+      const json = await getJson(
+        "https://api.anthropic.com/v1/models",
+        {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01"
+        },
+        mode.label
+      );
+      return mergeStaticModelFallbacks(provider, extractGenericModelEntries(json, mode.label));
+    }
+    case "cohere": {
+      const json = await getJson(
+        "https://api.cohere.com/v1/models?endpoint=chat",
+        { Authorization: `Bearer ${apiKey}` },
+        mode.label
+      );
+      return mergeStaticModelFallbacks(provider, extractGenericModelEntries(json, mode.label));
+    }
+    case "gemini": {
+      const json = await getJson(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+        {},
+        mode.label
+      );
+      return mergeStaticModelFallbacks(provider, extractGeminiModelEntries(json));
+    }
+  }
+}
+
+async function resolvePanelApiKey(
+  provider: GenerationProvider,
+  values: Record<string, unknown>,
+  secrets: vscode.SecretStorage
+): Promise<string> {
+  const mode = PROVIDER_MODE_DEFINITIONS[provider];
+  const providerSecret = await getSecretValue(secrets, mode.secretKey);
+  const providerSetting =
+    mode.apiKeySetting ? getConfiguredValue<string>(mode.apiKeySetting, "").trim() : "";
+
+  return resolveApiKeyValue({
+    genericSecret: asString(values.apiKey) || (await getSecretValue(secrets, GENERIC_API_KEY_SECRET_KEY)),
+    providerSecret: asString(values.providerApiKey) || providerSecret,
+    legacySetting: providerSetting || getConfiguredValue<string>("apiKey", "").trim(),
+    environmentValues: getProviderEnvironmentValues(provider)
+  });
+}
+
+function getProviderEnvironmentValues(provider: GenerationProvider): string[] {
+  switch (provider) {
+    case "openai":
+      return [process.env.OPENAI_API_KEY ?? ""];
+    case "deepseek":
+      return [process.env.DEEPSEEK_API_KEY ?? ""];
+    case "anthropic":
+      return [process.env.ANTHROPIC_API_KEY ?? ""];
+    case "cohere":
+      return [process.env.COHERE_API_KEY ?? ""];
+    case "gemini":
+      return [process.env.GEMINI_API_KEY ?? "", process.env.GOOGLE_API_KEY ?? ""];
+    case "mistral":
+      return [process.env.MISTRAL_API_KEY ?? ""];
+    case "openrouter":
+      return [process.env.OPENROUTER_API_KEY ?? ""];
+    case "huggingface":
+      return [process.env.HF_TOKEN ?? "", process.env.HUGGINGFACE_API_KEY ?? ""];
+    case "customOpenAiCompatible":
+      return [process.env.OPENAI_COMPATIBLE_API_KEY ?? ""];
+    case "codexCli":
+    case "codexExtensionThenCli":
+      return [];
+  }
+}
+
+function getOpenAiCompatibleBaseUrlForModels(
+  provider: GenerationProvider,
+  values: Record<string, unknown>
+): string {
+  if (provider === "customOpenAiCompatible") {
+    return (
+      asString(values.customOpenAiCompatibleBaseUrl) ||
+      getConfiguredValue<string>("customOpenAiCompatibleBaseUrl", "").trim()
+    );
+  }
+  return PROVIDER_MODE_DEFINITIONS[provider].defaultBaseUrl ?? "";
+}
+
+function mergeStaticModelFallbacks(
+  provider: GenerationProvider,
+  fetched: ModelCatalogEntry[]
+): ModelCatalogEntry[] {
+  const seen = new Set<string>();
+  const merged: ModelCatalogEntry[] = [];
+  for (const entry of [...fetched, ...buildStaticModelCatalog()[provider]]) {
+    if (seen.has(entry.id)) {
+      continue;
+    }
+    seen.add(entry.id);
+    merged.push(entry);
+  }
+  return merged;
+}
+
+function extractOpenAiCompatibleModelEntries(
+  provider: GenerationProvider,
+  value: unknown,
+  source: string
+): ModelCatalogEntry[] {
+  const data = extractArrayField(value, "data");
+  return data
+    .map((item) => {
+      const entry = extractModelEntryFromRecord(item, source);
+      if (!entry) {
+        return null;
+      }
+      if (provider === "deepseek" && !PROVIDER_MODE_DEFINITIONS.deepseek.modelOptions.includes(entry.id)) {
+        return null;
+      }
+      return entry;
+    })
+    .filter((entry): entry is ModelCatalogEntry => entry !== null);
+}
+
+function extractGenericModelEntries(value: unknown, source: string): ModelCatalogEntry[] {
+  const data = extractModelArray(value);
+  return data
+    .map((item) => extractModelEntryFromRecord(item, source))
+    .filter((entry): entry is ModelCatalogEntry => entry !== null);
+}
+
+function extractGeminiModelEntries(value: unknown): ModelCatalogEntry[] {
+  return extractArrayField(value, "models")
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const record = item as Record<string, unknown>;
+      const supportedMethods = Array.isArray(record.supportedGenerationMethods)
+        ? record.supportedGenerationMethods
+        : [];
+      if (!supportedMethods.includes("generateContent")) {
+        return null;
+      }
+      const rawName = asString(record.name);
+      const id = rawName.replace(/^models\//, "");
+      if (!id) {
+        return null;
+      }
+      return {
+        id,
+        label: asString(record.displayName) || id,
+        inputCost: "",
+        outputCost: "",
+        billing: "",
+        source: "Google Gemini"
+      };
+    })
+    .filter((entry): entry is ModelCatalogEntry => entry !== null);
+}
+
+function extractModelEntryFromRecord(value: unknown, source: string): ModelCatalogEntry | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const id = asString(record.id) || asString(record.name);
+  if (!id) {
+    return null;
+  }
+  const pricing = record.pricing && typeof record.pricing === "object"
+    ? (record.pricing as Record<string, unknown>)
+    : {};
+  return {
+    id,
+    label: asString(record.display_name) || asString(record.displayName) || asString(record.name) || id,
+    inputCost: formatPerMillionTokenCost(pricing.prompt ?? pricing.input),
+    outputCost: formatPerMillionTokenCost(pricing.completion ?? pricing.output),
+    billing: formatContextLength(record.context_length ?? record.contextLength),
+    source
+  };
+}
+
+function extractModelArray(value: unknown): unknown[] {
+  const data = extractArrayField(value, "data");
+  return data.length > 0 ? data : extractArrayField(value, "models");
+}
+
+function extractArrayField(value: unknown, field: string): unknown[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const array = (value as Record<string, unknown>)[field];
+  return Array.isArray(array) ? array : [];
+}
+
+function formatContextLength(value: unknown): string {
+  const numeric = asFiniteNumber(value);
+  if (numeric !== null && numeric > 0) {
+    return `Context: ${formatNumber(numeric)}`;
+  }
+  const text = asString(value);
+  return text ? `Context: ${text}` : "";
+}
+
+function formatPerMillionTokenCost(value: unknown): string {
+  const numeric = typeof value === "number" ? value : Number(asString(value));
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return "";
+  }
+  return `$${(numeric * 1_000_000).toFixed(3)}/1M tokens`;
 }
 
 async function generateWithCodex(request: TextGenerationRequest): Promise<GeneratedTextResult> {
@@ -2328,6 +3006,33 @@ async function postJson(
 
   if (json === null) {
     throw new Error(`${providerLabel} API returned a non-JSON response.`);
+  }
+
+  return json;
+}
+
+async function getJson(
+  url: string,
+  headers: Record<string, string>,
+  providerLabel: string
+): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await fetch(url, { method: "GET", headers });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown network error.";
+    throw new Error(`${providerLabel} model list failed before a response was received.\n\n${message}`);
+  }
+
+  const text = await response.text();
+  const json = parseJsonText(text);
+  if (!response.ok) {
+    const details = extractHttpErrorDetails(json) || text || response.statusText;
+    throw new Error(`${providerLabel} model list failed (${response.status}).\n\n${details}`);
+  }
+
+  if (json === null) {
+    throw new Error(`${providerLabel} model list returned a non-JSON response.`);
   }
 
   return json;
@@ -2826,7 +3531,7 @@ async function runCodexCli(
       "Fix one of these:\n" +
       "1) Install Codex CLI and ensure VS Code can access it in PATH.\n" +
       "2) Set `codexCommitWidget.codexCommand` to the full executable path (for Windows, commonly `%APPDATA%\\\\npm\\\\codex.cmd`).\n" +
-      "3) Run `AI Helper: Setup Codex CLI` from the Command Palette (or sidebar).\n" +
+      "3) Select the AI Helper Activity Bar icon, then use `Run Setup Wizard`.\n" +
       "4) Use extension mode by setting `codexCommitWidget.provider` to `codexExtensionThenCli` and configuring `codexCommitWidget.codexExtensionCommand`.\n\n" +
       enoentMessage
   );
