@@ -1,12 +1,20 @@
-# AI Commit & Prompt Helper v2.0.6
+# AI Commit & Prompt Helper v2.0.7
 
 ![AI Commit & Prompt Helper logo](media/logo.png)
 
 Generate structured, review-friendly AI commit messages from staged Git changes and improve coding prompts in VS Code using Codex CLI, OpenRouter, Hugging Face, and OpenAI-compatible LLM APIs.
 
-Current extension release: `v2.0.6`.
+Current extension release: `v2.0.7`.
 
 ## Release Notes
+
+### v2.0.7
+
+- Fixed provider/model saves so workspace-level settings do not silently override the selected mode.
+- Added an **Auto-find Codex CLI** action in setup that searches PATH and common npm install locations without hardcoding local developer paths.
+- Added **Check Codex Status** to show Codex CLI version, login state, and account label when available.
+- Clarified the setup wizard guidance so users know they must save the settings panel to apply provider, model, key, and command choices.
+- Improved limits and usage text so truncation, output-token defaults, and tracked token usage are visible in setup.
 
 ### v2.0.6
 
@@ -135,6 +143,8 @@ Core:
 - `codexCommitWidget.codexCommand`
 - `codexCommitWidget.codexExtensionCommand`
 - `codexCommitWidget.customOpenAiCompatibleBaseUrl`
+
+For Codex CLI modes, use **Auto-find Codex CLI** in the setup panel to search PATH and common npm install locations, then use **Check Codex Status** to verify the detected CLI login before saving.
 
 API keys and tokens:
 

@@ -2,7 +2,7 @@
 
 This document shows practical `settings.json` examples for **AI Commit & Prompt Helper**.
 
-Applies to extension release: `v2.0.6`.
+Applies to extension release: `v2.0.7`.
 
 ## Visual Preview
 
@@ -160,7 +160,9 @@ If Codex CLI is installed globally but not detected in VS Code:
 
 1. Select the **AI Helper** Activity Bar icon.
 2. Use **Run Setup Wizard**.
-3. Save the detected or manually entered `codexCommitWidget.codexCommand`.
+3. Use **Auto-find Codex CLI** or manually enter `codexCommitWidget.codexCommand`.
+4. Use **Check Codex Status** to confirm the detected CLI, version, login state, and account label.
+5. Save settings.
 
 ## Prompt Customization
 
@@ -201,6 +203,8 @@ Set each value to `null` to let provider defaults apply.
   "codexCommitWidget.analyticsRetentionDays": 7
 }
 ```
+
+The settings panel shows the current token usage summary, generation count, estimated-run count, and last updated timestamp. `codexCommitWidget.maxDiffChars` controls staged-diff truncation before sending context, while `codexCommitWidget.maxOutputTokensOverride` can be left empty to use the provider default.
 
 The extension auto-populates these settings from tracked runs:
 

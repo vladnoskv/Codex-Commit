@@ -128,6 +128,56 @@ function testSidebarActionOnlyOpensSettings(): void {
     !extensionSource.includes('new vscode.TreeItem("Improve Prompt"'),
     "sidebar should not duplicate prompt actions"
   );
+  assert.ok(
+    extensionSource.includes("Run Setup Wizard opens this guided settings flow"),
+    "setup wizard should explain that saving this settings panel applies the selected provider"
+  );
+  assert.ok(
+    extensionSource.includes("Auto-find Codex CLI"),
+    "settings panel should expose a Codex CLI auto-find action"
+  );
+  assert.ok(
+    extensionSource.includes("Check Codex Status"),
+    "settings panel should expose a Codex CLI status action"
+  );
+  assert.ok(
+    extensionSource.includes('type === "findCodexCli"'),
+    "settings panel should handle Codex CLI auto-discovery without requiring native settings"
+  );
+  assert.ok(
+    extensionSource.includes('type === "checkCodexCliStatus"'),
+    "settings panel should handle Codex CLI auth status checks"
+  );
+  assert.ok(
+    extensionSource.includes('"login", "status"'),
+    "Codex CLI auth detection should use the supported `codex login status` command"
+  );
+  assert.ok(
+    extensionSource.includes("readLocalCodexAuthStatus") &&
+      extensionSource.includes("decodeJwtPayload"),
+    "Codex CLI auth status should fall back to safe local auth metadata when CLI status is stale"
+  );
+  assert.ok(
+    extensionSource.includes("getConfigurationUpdateTarget"),
+    "settings saves should update the effective configuration target instead of only global settings"
+  );
+  assert.ok(
+    extensionSource.includes("vscode.ConfigurationTarget.WorkspaceFolder"),
+    "settings saves should be able to replace workspace-folder provider/model overrides"
+  );
+  assert.ok(
+    extensionSource.includes("analyticsSummary") &&
+      extensionSource.includes("Token usage"),
+    "settings panel should show current usage analytics, not only raw limits inputs"
+  );
+  const localProfile = process.env.USERPROFILE || "";
+  if (localProfile) {
+    assert.ok(
+      !extensionSource.includes(localProfile) &&
+        !extensionSource.includes(localProfile.replace(/\\/g, "/")),
+      "production extension source must not include the developer's local Codex CLI path"
+    );
+  }
 }
 
 function testDocsMatchCurrentRelease(): void {
@@ -135,15 +185,15 @@ function testDocsMatchCurrentRelease(): void {
   const configuration = readFileSync(join(__dirname, "..", "docs", "configuration.md"), "utf8");
 
   assert.ok(
-    readme.startsWith("# AI Commit & Prompt Helper v2.0.6"),
+    readme.startsWith("# AI Commit & Prompt Helper v2.0.7"),
     "README title should describe the current release"
   );
   assert.ok(
-    readme.includes("Current extension release: `v2.0.6`."),
+    readme.includes("Current extension release: `v2.0.7`."),
     "README current release line should match the package version"
   );
   assert.ok(
-    configuration.includes("Applies to extension release: `v2.0.6`."),
+    configuration.includes("Applies to extension release: `v2.0.7`."),
     "configuration docs should describe the current release"
   );
 }

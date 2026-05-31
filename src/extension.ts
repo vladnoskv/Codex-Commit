@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import type { ExecFileOptions } from "node:child_process";
 import { readFile, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import {
@@ -97,6 +97,18 @@ type TokenUsageEntry = {
   outputTokens: number;
   totalTokens: number;
   estimated: boolean;
+};
+
+type CodexCliAuthStatus = {
+  state: "logged-in" | "logged-out" | "credentials-found" | "unknown";
+  accountLabel: string;
+  detail: string;
+  source: string;
+};
+
+type CodexCliPanelStatus = CodexCliAuthStatus & {
+  command: string;
+  version: string;
 };
 
 const CONFIG_SECTION = "codexCommitWidget";
@@ -479,7 +491,14 @@ async function readSettingsPanelState(
     topPOverride: getConfiguredValue<number | null>("topPOverride", null),
     maxOutputTokensOverride: getConfiguredValue<number | null>("maxOutputTokensOverride", null),
     trackTokenUsageAnalytics: getConfiguredValue<boolean>("trackTokenUsageAnalytics", true),
-    analyticsRetentionDays: getAnalyticsRetentionDays()
+    analyticsRetentionDays: getAnalyticsRetentionDays(),
+    analyticsSummary: getConfiguredValue<string>("analyticsSummary", "No tracked generations yet."),
+    analyticsTotalTokens: getConfiguredValue<number>("analyticsTotalTokens", 0),
+    analyticsInputTokens: getConfiguredValue<number>("analyticsInputTokens", 0),
+    analyticsOutputTokens: getConfiguredValue<number>("analyticsOutputTokens", 0),
+    analyticsGenerations: getConfiguredValue<number>("analyticsGenerations", 0),
+    analyticsEstimatedRuns: getConfiguredValue<number>("analyticsEstimatedRuns", 0),
+    analyticsLastUpdated: getConfiguredValue<string>("analyticsLastUpdated", "never")
   };
 }
 
@@ -510,6 +529,55 @@ async function handleSettingsPanelMessage(
     await panel.webview.postMessage({
       type: "state",
       state: await readSettingsPanelState(context, true)
+    });
+    return;
+  }
+
+  if (record.type === "findCodexCli") {
+    const values = record.values && typeof record.values === "object"
+      ? (record.values as Record<string, unknown>)
+      : {};
+    const configuredCommand = asString(values.codexCommand) || getConfiguredValue<string>("codexCommand", "codex");
+    const discovered = await discoverCodexCliBinary(configuredCommand);
+    if (!discovered) {
+      await panel.webview.postMessage({
+        type: "error",
+        message: "Could not find Codex CLI. Install it, run codex login, or enter the full codex command path."
+      });
+      return;
+    }
+    await panel.webview.postMessage({
+      type: "codexCliFound",
+      command: discovered.command,
+      version: discovered.version,
+      status: await getCodexCliPanelStatus(discovered.command, discovered.version)
+    });
+    return;
+  }
+
+  if (record.type === "checkCodexCliStatus") {
+    const values = record.values && typeof record.values === "object"
+      ? (record.values as Record<string, unknown>)
+      : {};
+    const configuredCommand = asString(values.codexCommand) || getConfiguredValue<string>("codexCommand", "codex");
+    const discovered = await discoverCodexCliBinary(configuredCommand);
+    if (!discovered) {
+      await panel.webview.postMessage({
+        type: "codexCliStatus",
+        status: {
+          command: configuredCommand,
+          version: "",
+          state: "unknown",
+          accountLabel: "",
+          detail: "Codex CLI was not found. Use Auto-find Codex CLI or enter the full command path.",
+          source: "Discovery"
+        }
+      });
+      return;
+    }
+    await panel.webview.postMessage({
+      type: "codexCliStatus",
+      status: await getCodexCliPanelStatus(discovered.command, discovered.version)
     });
     return;
   }
@@ -771,7 +839,7 @@ function normalizeModelForSave(
   context: vscode.ExtensionContext
 ): string {
   if (!model) {
-    return "";
+    return getDefaultModelForProvider(provider);
   }
   if (isAllowedModelSelection(provider, model, context)) {
     return model;
@@ -815,10 +883,30 @@ async function updateSettingIfChanged(
   value: string | number | boolean | null
 ): Promise<void> {
   const current = config.get<unknown>(key);
-  if (current === value) {
+  const legacyConfig = vscode.workspace.getConfiguration(LEGACY_CONFIG_SECTION);
+  const needsExplicitCurrentSetting =
+    !hasExplicitConfigurationValue(config, key) && hasExplicitConfigurationValue(legacyConfig, key);
+  if (current === value && !needsExplicitCurrentSetting) {
     return;
   }
-  await config.update(key, value, vscode.ConfigurationTarget.Global);
+  await config.update(key, value, getConfigurationUpdateTarget(config, key));
+}
+
+function getConfigurationUpdateTarget(
+  config: vscode.WorkspaceConfiguration,
+  key: string
+): vscode.ConfigurationTarget {
+  const inspected = config.inspect<unknown>(key);
+  if (
+    inspected?.workspaceFolderValue !== undefined ||
+    inspected?.workspaceFolderLanguageValue !== undefined
+  ) {
+    return vscode.ConfigurationTarget.WorkspaceFolder;
+  }
+  if (inspected?.workspaceValue !== undefined || inspected?.workspaceLanguageValue !== undefined) {
+    return vscode.ConfigurationTarget.Workspace;
+  }
+  return vscode.ConfigurationTarget.Global;
 }
 
 function asString(value: unknown): string {
@@ -977,6 +1065,9 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       gap: 8px;
       align-items: end;
     }
+    .model-row .model-meta {
+      grid-column: 1 / -1;
+    }
     .model-meta {
       min-height: 18px;
       color: var(--muted);
@@ -1124,14 +1215,14 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
         <div class="hint" id="modeSummary">Choose how AI Helper generates commit messages and prompt rewrites.</div>
       </div>
       <div class="header-actions">
-        <button class="secondary" type="button" id="runSetup">Run Setup Wizard</button>
+        <button class="secondary" type="button" id="runSetup" title="Run Setup Wizard opens this guided settings flow. Choose a provider and model, then Save Settings to apply them.">Run Setup Wizard</button>
         <button class="secondary" type="button" id="nativeSettings">VS Code Settings</button>
       </div>
     </header>
 
     <section class="callout hidden" id="setupCallout">
       <strong>Setup wizard</strong>
-      <div class="hint">Choose a provider, add the required key or command, refresh models when available, review the prompt, then save.</div>
+      <div class="hint">Run Setup Wizard opens this guided settings flow. Choose a provider and model, add the required key or command, refresh models when available, review the prompt, then Save Settings to apply the selection.</div>
     </section>
 
     <nav class="nav-tabs" aria-label="Settings sections">
@@ -1165,10 +1256,15 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
           <span>Custom provider model ID</span>
           <input id="model" name="model" type="text" autocomplete="off">
         </label>
-        <label id="codexCommandField">
-          <span>Codex command</span>
-          <input id="codexCommand" name="codexCommand" type="text" autocomplete="off">
-        </label>
+        <div class="model-row" id="codexCommandField">
+          <label>
+            <span class="label-row"><span>Codex command</span><span class="hint">Use the command name or full path to your local Codex CLI.</span></span>
+            <input id="codexCommand" name="codexCommand" type="text" autocomplete="off">
+          </label>
+          <button class="secondary" type="button" id="findCodexCommand" title="Search PATH and common npm install locations for codex.cmd or codex.">Auto-find Codex CLI</button>
+          <button class="secondary" type="button" id="checkCodexStatus" title="Run codex login status and show the detected account when available.">Check Codex Status</button>
+          <div class="model-meta" id="codexCliStatus">Codex CLI status not checked.</div>
+        </div>
         <label id="codexExtensionCommandField">
           <span>Codex extension command</span>
           <input id="codexExtensionCommand" name="codexExtensionCommand" type="text" autocomplete="off">
@@ -1227,7 +1323,7 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
           <input id="topPOverride" name="topPOverride" type="number" min="0" max="1" step="0.01">
         </label>
         <label>
-          <span>Max output tokens</span>
+          <span class="label-row"><span>Max output tokens</span><span class="hint">Leave empty for provider default.</span></span>
           <input id="maxOutputTokensOverride" name="maxOutputTokensOverride" type="number" min="1" step="1">
         </label>
       </section>
@@ -1247,13 +1343,14 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       <section id="generationSection">
         <h2>Limits</h2>
         <label>
-          <span>Max diff characters</span>
+          <span class="label-row"><span>Max diff characters</span><span class="hint">Staged diffs above this size are truncated before sending.</span></span>
           <input id="maxDiffChars" name="maxDiffChars" type="number" min="1" step="1000">
         </label>
       </section>
 
       <section id="usageSection">
         <h2>Usage analytics</h2>
+        <div class="model-meta" id="usageSummary">Token usage: no tracked generations yet.</div>
         <label class="inline">
           <input id="trackTokenUsageAnalytics" name="trackTokenUsageAnalytics" type="checkbox">
           <span>Track token usage</span>
@@ -1299,6 +1396,9 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       model: document.getElementById("model"),
       codexCommandField: document.getElementById("codexCommandField"),
       codexCommand: document.getElementById("codexCommand"),
+      findCodexCommand: document.getElementById("findCodexCommand"),
+      checkCodexStatus: document.getElementById("checkCodexStatus"),
+      codexCliStatus: document.getElementById("codexCliStatus"),
       codexExtensionCommandField: document.getElementById("codexExtensionCommandField"),
       codexExtensionCommand: document.getElementById("codexExtensionCommand"),
       customBaseUrlField: document.getElementById("customBaseUrlField"),
@@ -1319,6 +1419,7 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       maxDiffChars: document.getElementById("maxDiffChars"),
       trackTokenUsageAnalytics: document.getElementById("trackTokenUsageAnalytics"),
       analyticsRetentionDays: document.getElementById("analyticsRetentionDays"),
+      usageSummary: document.getElementById("usageSummary"),
       saveStatus: document.getElementById("saveStatus")
     };
 
@@ -1344,6 +1445,7 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       controls.maxOutputTokensOverride.value = numberValue(state.maxOutputTokensOverride);
       controls.trackTokenUsageAnalytics.checked = state.trackTokenUsageAnalytics !== false;
       controls.analyticsRetentionDays.value = numberValue(state.analyticsRetentionDays);
+      renderUsageSummary();
       renderMode();
       applySecretVisibility();
       setStatus("");
@@ -1373,6 +1475,29 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       controls.providerApiKey.value = state.apiKeys[state.provider] || "";
       controls.providerApiKey.placeholder = configured ? "Configured" : "";
       controls.refreshModels.disabled = mode.provider === "codexCli" || mode.provider === "codexExtensionThenCli";
+      controls.checkCodexStatus.disabled = !(mode.provider === "codexCli" || mode.provider === "codexExtensionThenCli");
+      controls.findCodexCommand.disabled = controls.checkCodexStatus.disabled;
+    }
+
+    function renderUsageSummary() {
+      const total = Number(state.analyticsTotalTokens || 0);
+      const input = Number(state.analyticsInputTokens || 0);
+      const output = Number(state.analyticsOutputTokens || 0);
+      const generations = Number(state.analyticsGenerations || 0);
+      const estimated = Number(state.analyticsEstimatedRuns || 0);
+      const updated = state.analyticsLastUpdated || "never";
+      const summary = state.analyticsSummary || "No tracked generations yet.";
+      controls.usageSummary.textContent =
+        "Token usage: " + summary +
+        " | Runs: " + generations +
+        " | Total: " + formatInteger(total) +
+        " (input " + formatInteger(input) + ", output " + formatInteger(output) + ")" +
+        (estimated ? " | Estimated: " + estimated : "") +
+        " | Updated: " + updated;
+    }
+
+    function formatInteger(value) {
+      return Number.isFinite(value) ? Math.round(value).toLocaleString() : "0";
     }
 
     function renderModelChoices(mode) {
@@ -1544,7 +1669,8 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
     controls.providerSelect.addEventListener("change", () => {
       rememberProviderKey();
       state.provider = controls.providerSelect.value;
-      controls.model.value = "";
+      const mode = modes[state.provider] || modes.codexCli;
+      controls.model.value = mode.defaultModel || "";
       setStatus("");
       renderMode();
       requestModelRefresh();
@@ -1566,6 +1692,18 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       requestModelRefresh();
     });
 
+    controls.findCodexCommand.addEventListener("click", () => {
+      setStatus("Searching for Codex CLI...");
+      controls.findCodexCommand.disabled = true;
+      vscode.postMessage({ type: "findCodexCli", values: collectSettingsValues() });
+    });
+
+    controls.checkCodexStatus.addEventListener("click", () => {
+      controls.codexCliStatus.textContent = "Checking Codex CLI status...";
+      controls.checkCodexStatus.disabled = true;
+      vscode.postMessage({ type: "checkCodexCliStatus", values: collectSettingsValues() });
+    });
+
     document.querySelectorAll("[data-toggle-secret]").forEach((button) => {
       button.addEventListener("click", () => {
         const inputId = button.getAttribute("data-toggle-secret");
@@ -1582,7 +1720,7 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       state.setupMode = true;
       controls.setupCallout.classList.remove("hidden");
       setStatus("Setup wizard reopened. Review provider, model, API key, and prompt settings, then save.");
-      vscode.postMessage({ type: "runSetup" });
+      controls.providerSelect.focus();
     });
 
     document.querySelectorAll("[data-scroll-target]").forEach((button) => {
@@ -1622,11 +1760,39 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
         renderMode();
         setStatus("Models refreshed.");
       }
+      if (event.data && event.data.type === "codexCliFound") {
+        controls.codexCommand.value = event.data.command || "codex";
+        controls.findCodexCommand.disabled = false;
+        if (event.data.status) {
+          renderCodexCliStatus(event.data.status);
+        }
+        setStatus("Found Codex CLI" + (event.data.version ? ": " + event.data.version : "") + ". Save Settings to use it.");
+      }
+      if (event.data && event.data.type === "codexCliStatus") {
+        controls.checkCodexStatus.disabled = false;
+        renderCodexCliStatus(event.data.status || {});
+      }
       if (event.data && event.data.type === "error") {
         controls.refreshModels.disabled = false;
+        controls.findCodexCommand.disabled = false;
+        controls.checkCodexStatus.disabled = false;
         setStatus(event.data.message || "Could not save settings.", true);
       }
     });
+
+    function renderCodexCliStatus(status) {
+      const stateLabel = {
+        "logged-in": "Logged in",
+        "credentials-found": "Credentials found",
+        "logged-out": "Not logged in",
+        "unknown": "Unknown"
+      }[status.state] || "Unknown";
+      const account = status.accountLabel ? " | Account: " + status.accountLabel : "";
+      const version = status.version ? " | " + status.version : "";
+      const source = status.source ? " | Source: " + status.source : "";
+      const detail = status.detail ? " | " + status.detail : "";
+      controls.codexCliStatus.textContent = "Codex CLI: " + stateLabel + account + version + source + detail;
+    }
 
     vscode.postMessage({ type: "ready" });
   </script>
@@ -3599,8 +3765,8 @@ function getAuthRequiredMessage(
   const detailsSuffix = detailLines.length > 0 ? `\n\nDetails:\n${detailLines.join("\n")}` : "";
 
   return (
-    "You must be logged into a Codex auth session to use commit generation.\n" +
-    "Run `codex login` in a terminal, then try again. If you have multiple Codex installs, set `codexCommitWidget.codexCommand` to the exact binary you logged into." +
+    "Codex CLI reported that it could not use an authenticated session for commit generation.\n" +
+    "Run `codex login status` with the same command shown in AI Helper settings. If needed, run `codex login`, then use Check Codex Status in the setup panel. If you have multiple Codex installs, set `codexCommitWidget.codexCommand` to the exact binary you logged into." +
     triedSuffix +
     detailsSuffix
   );
@@ -3614,7 +3780,7 @@ function getNoLastAgentMessageError(details: string): string {
 
   return (
     "Codex CLI completed without a final assistant message, so no commit message could be extracted.\n" +
-    "If you're not logged in, run `codex login` (or `codex auth login` on older CLIs) and try again. If you're already logged in, retry once and ensure your Codex CLI is up to date." +
+    "Use Check Codex Status in the setup panel, or run `codex login status` with the configured command. If status fails, run `codex login` and try again. If you're already logged in, retry once and ensure your Codex CLI is up to date." +
     suffix
   );
 }
@@ -3721,6 +3887,142 @@ function getNpmGlobalPrefixesFromEnv(): string[] {
     .map((value) => value?.trim() || "")
     .filter(Boolean);
   return Array.from(new Set(prefixes));
+}
+
+async function getCodexCliPanelStatus(
+  command: string,
+  version: string
+): Promise<CodexCliPanelStatus> {
+  const cliStatus = await getCodexCliAuthStatus(command);
+  return {
+    command,
+    version,
+    ...cliStatus
+  };
+}
+
+async function getCodexCliAuthStatus(command: string): Promise<CodexCliAuthStatus> {
+  const shell = shouldUseShellForCliCandidate(command);
+  try {
+    const { stdout, stderr } = await execFileAsync(command, ["login", "status"], {
+      maxBuffer: 1024 * 1024,
+      env: process.env,
+      shell,
+      timeout: 8000
+    });
+    const parsed = parseCodexLoginStatusOutput(`${stdout ?? ""}\n${stderr ?? ""}`, true);
+    if (parsed.state === "logged-out") {
+      return (await readLocalCodexAuthStatus(parsed.detail)) ?? parsed;
+    }
+    return parsed;
+  } catch (error: any) {
+    const details = [
+      String(error?.stdout ?? ""),
+      String(error?.stderr ?? ""),
+      String(error?.message ?? "")
+    ].filter(Boolean).join("\n");
+    const parsed = parseCodexLoginStatusOutput(details, false);
+    if (parsed.state === "logged-out") {
+      return (await readLocalCodexAuthStatus(parsed.detail)) ?? parsed;
+    }
+    return parsed;
+  }
+}
+
+function parseCodexLoginStatusOutput(text: string, exitedSuccessfully: boolean): CodexCliAuthStatus {
+  const detail = text.trim().split(/\r?\n/).filter(Boolean).slice(0, 3).join(" | ");
+  const normalized = normalizeWhitespace(text);
+  if (normalized.includes("not logged in")) {
+    return {
+      state: "logged-out",
+      accountLabel: "",
+      detail: detail || "Codex CLI reports not logged in.",
+      source: "codex login status"
+    };
+  }
+
+  const accountLabel =
+    text.match(/logged in as\s+(.+)/i)?.[1]?.trim() ||
+    text.match(/account[:\s]+(.+)/i)?.[1]?.trim() ||
+    "";
+  if (exitedSuccessfully || normalized.includes("logged in") || normalized.includes("authenticated")) {
+    return {
+      state: "logged-in",
+      accountLabel,
+      detail: detail || "Codex CLI reports an active login.",
+      source: "codex login status"
+    };
+  }
+
+  return {
+    state: "unknown",
+    accountLabel: "",
+    detail: detail || "Could not determine Codex login status.",
+    source: "codex login status"
+  };
+}
+
+async function readLocalCodexAuthStatus(cliDetail: string): Promise<CodexCliAuthStatus | null> {
+  try {
+    const authPath = join(homedir(), ".codex", "auth.json");
+    const raw = await readFile(authPath, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const apiKey = asString(parsed.OPENAI_API_KEY);
+    if (apiKey) {
+      return {
+        state: "credentials-found",
+        accountLabel: "API key configured",
+        detail: "Codex auth file contains an API key, but CLI status reported: " + cliDetail,
+        source: "Local auth file"
+      };
+    }
+
+    const tokens = parsed.tokens && typeof parsed.tokens === "object"
+      ? (parsed.tokens as Record<string, unknown>)
+      : null;
+    if (!tokens) {
+      return null;
+    }
+    const payload = decodeJwtPayload(asString(tokens.id_token));
+    const accountLabel =
+      asString(payload?.name) ||
+      asString(payload?.email) ||
+      asString(tokens.account_id) ||
+      "ChatGPT account";
+    const exp = typeof payload?.exp === "number" ? payload.exp : null;
+    const isExpired = exp !== null && exp * 1000 <= Date.now();
+    return {
+      state: isExpired ? "unknown" : "credentials-found",
+      accountLabel,
+      detail: isExpired
+        ? "Local Codex credentials exist, but the ID token appears expired. Run codex login again."
+        : "Local Codex credentials exist, but CLI status reported: " + cliDetail,
+      source: "Local auth file"
+    };
+  } catch {
+    return null;
+  }
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  const parts = token.split(".");
+  if (parts.length < 2) {
+    return null;
+  }
+  try {
+    let payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padding = payload.length % 4;
+    if (padding === 2) {
+      payload += "==";
+    } else if (padding === 3) {
+      payload += "=";
+    } else if (padding !== 0) {
+      return null;
+    }
+    return JSON.parse(Buffer.from(payload, "base64").toString("utf8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 async function discoverCodexCliBinary(
