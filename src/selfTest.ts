@@ -11,6 +11,11 @@ import {
   resolveConfiguredModelForProvider,
   resolveApiKeyValue
 } from "./providers";
+import {
+  buildReleaseAssistantPrompt,
+  parseReleaseCommitsFromGitLog,
+  suggestSemverBumpFromCommits
+} from "./releaseAssistant";
 
 function readJsonFile<T>(relativePath: string): T {
   return JSON.parse(readFileSync(join(__dirname, "..", relativePath), "utf8")) as T;
@@ -58,6 +63,12 @@ function testPackageContributionIdsUseExtensionNamespace(): void {
     packageManifest.contributes.commands.every(({ command }) =>
       command.startsWith("codexCommitWidget.")
     )
+  );
+  assert.ok(
+    packageManifest.contributes.commands.some(
+      ({ command }) => command === "codexCommitWidget.generateReleaseAssistant"
+    ),
+    "package contributions should expose the release assistant command"
   );
   assert.ok(
     Object.keys(packageManifest.contributes.configuration.properties).every((key) =>
@@ -177,6 +188,11 @@ function testSidebarActionOnlyOpensSettings(): void {
       extensionSource.includes("Token usage"),
     "settings panel should show current usage analytics, not only raw limits inputs"
   );
+  assert.ok(
+    extensionSource.includes("GENERATE_RELEASE_ASSISTANT_COMMAND_ID") &&
+      extensionSource.includes("generateReleaseAssistant"),
+    "extension should register the release assistant command"
+  );
   const localProfile = process.env.USERPROFILE || "";
   if (localProfile) {
     assert.ok(
@@ -192,15 +208,15 @@ function testDocsMatchCurrentRelease(): void {
   const configuration = readFileSync(join(__dirname, "..", "docs", "configuration.md"), "utf8");
 
   assert.ok(
-    readme.startsWith("# AI Commit & Prompt Helper v2.0.7"),
+    readme.startsWith("# AI Commit & Prompt Helper v2.1.0"),
     "README title should describe the current release"
   );
   assert.ok(
-    readme.includes("Current extension release: `v2.0.7`."),
+    readme.includes("Current extension release: `v2.1.0`."),
     "README current release line should match the package version"
   );
   assert.ok(
-    configuration.includes("Applies to extension release: `v2.0.7`."),
+    configuration.includes("Applies to extension release: `v2.1.0`."),
     "configuration docs should describe the current release"
   );
 }
@@ -323,6 +339,51 @@ function testApiKeyResolutionPrefersSecretsBeforeLegacyAndEnvironment(): void {
   );
 }
 
+function testReleaseAssistantParsesGitHistoryAndSuggestsSemver(): void {
+  const rawLog = [
+    ["abc123", "abc123", "2026-05-30", "Vlad", "feat: add release assistant", ""].join("\x1f"),
+    [
+      "def456",
+      "def456",
+      "2026-05-29",
+      "Vlad",
+      "fix!: change provider selection contract",
+      "BREAKING CHANGE: provider IDs are now explicit."
+    ].join("\x1f"),
+    ""
+  ].join("\x1e");
+
+  const commits = parseReleaseCommitsFromGitLog(rawLog);
+
+  assert.equal(commits.length, 2);
+  assert.equal(commits[0].subject, "feat: add release assistant");
+  assert.equal(commits[1].body, "BREAKING CHANGE: provider IDs are now explicit.");
+  assert.equal(suggestSemverBumpFromCommits(commits).bump, "major");
+}
+
+function testReleaseAssistantPromptRequiresMvpSections(): void {
+  const commits = parseReleaseCommitsFromGitLog(
+    ["abc123", "abc123", "2026-05-30", "Vlad", "feat: add release assistant", ""].join("\x1f")
+  );
+
+  const prompt = buildReleaseAssistantPrompt({
+    targetVersion: "2.1.0",
+    rangeLabel: "v2.0.7..HEAD",
+    semverSuggestion: suggestSemverBumpFromCommits(commits),
+    historyContext: "Commit history:\nabc123 2026-05-30 feat: add release assistant",
+    packageName: "codex-commit-widget"
+  });
+
+  assert.ok(prompt.includes("Target version: 2.1.0"));
+  assert.ok(prompt.includes("Suggested Semver Bump"));
+  assert.ok(prompt.includes("Changelog"));
+  assert.ok(prompt.includes("GitHub Release Notes"));
+  assert.ok(prompt.includes("npm Release Summary"));
+  assert.ok(prompt.includes("PR Description"));
+  assert.ok(prompt.includes("Reviewer Checklist"));
+  assert.ok(prompt.includes("Only include facts supported by the Git history context."));
+}
+
 testPackageIdentityMatchesMarketplaceExtensionPath();
 testPackageContributionIdsUseExtensionNamespace();
 testSidebarActionOnlyOpensSettings();
@@ -331,3 +392,5 @@ testProviderModelDefaultsStayWithinProvider();
 testHuggingFaceProviderMetadata();
 testOpenRouterLowCostPresets();
 testApiKeyResolutionPrefersSecretsBeforeLegacyAndEnvironment();
+testReleaseAssistantParsesGitHistoryAndSuggestsSemver();
+testReleaseAssistantPromptRequiresMvpSections();

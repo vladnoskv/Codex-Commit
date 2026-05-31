@@ -1,12 +1,19 @@
-# AI Commit & Prompt Helper v2.0.7
+# AI Commit & Prompt Helper v2.1.0
 
 ![AI Commit & Prompt Helper logo](media/logo.png)
 
-Generate structured, review-friendly AI commit messages from staged Git changes and improve coding prompts in VS Code using Codex CLI, OpenRouter, Hugging Face, and OpenAI-compatible LLM APIs. 
+Generate structured, review-friendly AI commit messages, release workflow notes, and improved coding prompts in VS Code using Codex CLI, OpenRouter, Hugging Face, and OpenAI-compatible LLM APIs.
 
-Current extension release: `v2.0.7`.
+Current extension release: `v2.1.0`.
 
 ## Release Notes
+
+### v2.1.0
+
+- Added **AI Helper: Generate Release Assistant** to create release workflow Markdown from Git history.
+- Generates a changelog, deterministic semver bump suggestion, GitHub release notes, npm release summary, PR description, and reviewer checklist.
+- Defaults release history to the latest Git tag through `HEAD` and defaults the target version from `package.json` when available.
+- Opens generated release output in a Markdown review document instead of changing repository files automatically.
 
 ### v2.0.7
 
@@ -82,6 +89,11 @@ To improve a coding prompt, select prompt text in an editor and run **AI Helper:
 from the Command Palette. If no text is selected, the extension asks for a prompt, then
 shows a review document before you copy, open, or replace the improved version.
 
+To prepare release copy, run **AI Helper: Generate Release Assistant** from the Command
+Palette. The command reads Git history since the latest tag, asks for the target version,
+then opens a Markdown document containing a changelog, semver recommendation, GitHub
+release notes, npm summary, PR description, and reviewer checklist.
+
 ## Providers
 
 Set `codexCommitWidget.provider` to one of:
@@ -122,6 +134,10 @@ Commit generation sends staged context only:
 - Staged patch
 
 Prompt improvement sends only the selected/input prompt text. Absolute local repository paths are not sent.
+
+Release assistant generation sends Git history for the selected release range, changed
+file names, diff statistics, repository name, package name, and target version. It does
+not publish a GitHub release, run `npm publish`, create tags, or modify files.
 
 ## Settings
 

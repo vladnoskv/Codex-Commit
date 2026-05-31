@@ -2,7 +2,7 @@
 
 This document shows practical `settings.json` examples for **AI Commit & Prompt Helper**.
 
-Applies to extension release: `v2.0.7`.
+Applies to extension release: `v2.1.0`.
 
 ## Visual Preview
 
@@ -182,6 +182,23 @@ into a clearer coding-agent prompt. If no text is selected, the extension asks f
 text first. It uses the same configured provider, model, API key, reasoning effort, and
 sampling overrides, then opens a review document before you copy, open, or replace the
 result.
+
+## Release Assistant
+
+Run `AI Helper: Generate Release Assistant` from the Command Palette to generate
+reviewable release workflow copy from Git history. The command uses the latest Git tag as
+the default base, asks for the target version, suggests a semver bump from Conventional
+Commit signals, then opens Markdown containing:
+
+- changelog
+- GitHub release notes
+- npm release summary
+- PR description
+- reviewer checklist
+
+The release assistant uses the same configured provider, model, API key, reasoning
+effort, sampling overrides, and token analytics settings as commit generation. It does
+not create tags, publish packages, create GitHub releases, or modify repository files.
 
 ## Sampling Overrides
 

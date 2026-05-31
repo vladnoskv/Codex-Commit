@@ -19,6 +19,14 @@ import {
   resolveConfiguredModelForProvider,
   resolveApiKeyValue
 } from "./providers";
+import {
+  RELEASE_GIT_LOG_FORMAT,
+  buildReleaseAssistantPrompt,
+  formatReleaseCommitsForPrompt,
+  normalizeGeneratedReleaseMarkdown,
+  parseReleaseCommitsFromGitLog,
+  suggestSemverBumpFromCommits
+} from "./releaseAssistant";
 
 const execFileAsync = promisify(execFile);
 
@@ -119,6 +127,7 @@ const CONFIG_SECTION = "codexCommitWidget";
 const LEGACY_CONFIG_SECTION = "aiCommitPromptHelper";
 const COMMAND_ID = "codexCommitWidget.generateCommitMessage";
 const IMPROVE_PROMPT_COMMAND_ID = "codexCommitWidget.improvePrompt";
+const GENERATE_RELEASE_ASSISTANT_COMMAND_ID = "codexCommitWidget.generateReleaseAssistant";
 const SETUP_CODEX_COMMAND_ID = "codexCommitWidget.setupCodexCli";
 const OPEN_SETTINGS_COMMAND_ID = "codexCommitWidget.openSettings";
 const LEGACY_COMMAND_ID = "aiCommitPromptHelper.generateCommitMessage";
@@ -166,6 +175,12 @@ export async function activate(context: vscode.ExtensionContext) {
     IMPROVE_PROMPT_COMMAND_ID,
     async () => {
       await improvePrompt(context);
+    }
+  );
+  const releaseAssistantCommandDisposable = vscode.commands.registerCommand(
+    GENERATE_RELEASE_ASSISTANT_COMMAND_ID,
+    async () => {
+      await generateReleaseAssistant(context);
     }
   );
   const setupCommandDisposable = vscode.commands.registerCommand(
@@ -224,6 +239,7 @@ export async function activate(context: vscode.ExtensionContext) {
     sidebarView,
     commandDisposable,
     improvePromptCommandDisposable,
+    releaseAssistantCommandDisposable,
     setupCommandDisposable,
     openSettingsCommandDisposable,
     ...legacyCommandDisposables,
@@ -2004,6 +2020,114 @@ async function improvePrompt(context: vscode.ExtensionContext): Promise<void> {
   }
 }
 
+async function generateReleaseAssistant(context: vscode.ExtensionContext): Promise<void> {
+  if (await promptForSetupIfNeeded(context)) {
+    return;
+  }
+
+  const gitExtension = vscode.extensions.getExtension("vscode.git");
+  if (!gitExtension) {
+    void vscode.window.showErrorMessage("Built-in Git extension is not available.");
+    return;
+  }
+
+  const gitApi = gitExtension.isActive
+    ? gitExtension.exports.getAPI(1)
+    : (await gitExtension.activate()).getAPI(1);
+
+  const repositories = gitApi.repositories as Array<{
+    rootUri: vscode.Uri;
+    inputBox: ScmInputBoxLike;
+  }>;
+
+  if (!repositories || repositories.length === 0) {
+    void vscode.window.showWarningMessage("No Git repository is open in this workspace.");
+    return;
+  }
+
+  const repo =
+    repositories.length === 1
+      ? repositories[0]
+      : await pickRepository(repositories);
+
+  if (!repo) {
+    return;
+  }
+
+  const packageIdentity = await readPackageIdentity(repo.rootUri.fsPath);
+  const targetVersion = await promptForReleaseTargetVersion(packageIdentity.version);
+  if (!targetVersion) {
+    return;
+  }
+
+  const settings = await readGenerationSettings(context);
+
+  try {
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Generating release assistant with ${getProviderLabel(settings.provider)}`,
+        cancellable: false
+      },
+      async () => {
+        const releaseContext = await getReleaseHistoryContext(repo.rootUri.fsPath);
+        if (releaseContext.commits.length === 0) {
+          throw new Error(
+            `No commits found for release range ${releaseContext.rangeLabel}. Add commits after the latest tag or create a custom release from a branch with new history.`
+          );
+        }
+
+        const semverSuggestion = suggestSemverBumpFromCommits(releaseContext.commits);
+        const historyContext = trimReleaseContextForTokenBudget(
+          [
+            "Commit history:",
+            formatReleaseCommitsForPrompt(releaseContext.commits),
+            "",
+            "Changed files:",
+            releaseContext.nameStatus || "(not available)",
+            "",
+            "Diff stats:",
+            releaseContext.diffStat || "(not available)"
+          ].join("\n"),
+          settings.maxDiffChars
+        );
+        const prompt = buildReleaseAssistantPrompt({
+          targetVersion,
+          rangeLabel: releaseContext.rangeLabel,
+          semverSuggestion,
+          historyContext,
+          packageName: packageIdentity.name
+        });
+
+        const generated = await generateTextWithSelectedProvider({
+          prompt,
+          cwd: repo.rootUri.fsPath,
+          settings,
+          trackTokenUsage: settings.trackTokenUsageAnalytics
+        });
+        const markdown = normalizeGeneratedReleaseMarkdown(generated.raw);
+        if (!markdown) {
+          throw new Error(`${getProviderLabel(settings.provider)} returned empty release notes.`);
+        }
+
+        if (generated.usage) {
+          await appendTokenUsageEntry(context, {
+            timestampMs: Date.now(),
+            ...generated.usage
+          });
+          await syncTokenUsageAnalyticsSettings(context);
+        }
+
+        await openReleaseAssistantDocument(markdown);
+        void vscode.window.showInformationMessage("Release assistant output opened for review.");
+      }
+    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error while generating release assistant output.";
+    void vscode.window.showErrorMessage(message);
+  }
+}
+
 async function getPromptImprovementSource(): Promise<PromptImprovementSource | null> {
   const editor = vscode.window.activeTextEditor ?? null;
   if (editor && !editor.selection.isEmpty) {
@@ -2050,6 +2174,105 @@ function getPromptImprovementCwd(editor: vscode.TextEditor | null): string {
 
   const firstWorkspaceFolder = vscode.workspace.workspaceFolders?.[0];
   return firstWorkspaceFolder?.uri.fsPath ?? process.cwd();
+}
+
+async function readPackageIdentity(cwd: string): Promise<{ name: string; version: string }> {
+  try {
+    const raw = await readFile(join(cwd, "package.json"), "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      name: asString(parsed.name),
+      version: asString(parsed.version)
+    };
+  } catch {
+    return {
+      name: "",
+      version: ""
+    };
+  }
+}
+
+async function promptForReleaseTargetVersion(defaultVersion: string): Promise<string | null> {
+  const targetVersion = await vscode.window.showInputBox({
+    title: "Generate Release Assistant",
+    prompt: "Enter the target release version.",
+    value: defaultVersion || "",
+    placeHolder: "2.1.0",
+    ignoreFocusOut: true,
+    validateInput: (value) => {
+      const normalized = normalizeReleaseVersion(value);
+      return normalized ? null : "Enter a semantic version such as 2.1.0.";
+    }
+  });
+
+  if (targetVersion === undefined) {
+    return null;
+  }
+
+  return normalizeReleaseVersion(targetVersion);
+}
+
+function normalizeReleaseVersion(value: string): string {
+  const trimmed = value.trim().replace(/^v/i, "");
+  return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(trimmed) ? trimmed : "";
+}
+
+async function getReleaseHistoryContext(cwd: string): Promise<{
+  rangeLabel: string;
+  commits: ReturnType<typeof parseReleaseCommitsFromGitLog>;
+  nameStatus: string;
+  diffStat: string;
+}> {
+  const latestTag = await getLatestGitTag(cwd);
+  const range = latestTag ? `${latestTag}..HEAD` : "HEAD";
+  const rangeLabel = latestTag ? range : "all commits through HEAD";
+  const log = await execGit(
+    ["log", "--date=short", `--format=${RELEASE_GIT_LOG_FORMAT}`, range],
+    cwd
+  );
+  const commits = parseReleaseCommitsFromGitLog(log.stdout);
+  const diffStat = latestTag
+    ? (await execGit(["diff", "--stat", "--no-ext-diff", range], cwd)).stdout.trim()
+    : "";
+  const nameStatus = latestTag
+    ? (await execGit(["diff", "--name-status", "--no-ext-diff", range], cwd)).stdout.trim()
+    : "";
+
+  return {
+    rangeLabel,
+    commits,
+    nameStatus,
+    diffStat
+  };
+}
+
+async function getLatestGitTag(cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await execGit(["describe", "--tags", "--abbrev=0"], cwd);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function trimReleaseContextForTokenBudget(context: string, maxChars: number): string {
+  if (context.length <= maxChars) {
+    return context;
+  }
+
+  return context.slice(0, maxChars) + "\n\n[Release history truncated to fit token budget]";
+}
+
+async function openReleaseAssistantDocument(markdown: string): Promise<void> {
+  const document = await vscode.workspace.openTextDocument({
+    language: "markdown",
+    content: markdown
+  });
+
+  await vscode.window.showTextDocument(document, {
+    viewColumn: vscode.ViewColumn.Beside,
+    preview: false
+  });
 }
 
 function buildPromptImprovementPrompt(userPrompt: string): string {
