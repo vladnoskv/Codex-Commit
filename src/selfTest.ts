@@ -135,20 +135,24 @@ function testDocsMatchCurrentRelease(): void {
   const configuration = readFileSync(join(__dirname, "..", "docs", "configuration.md"), "utf8");
 
   assert.ok(
-    readme.startsWith("# AI Commit & Prompt Helper v2.0.5"),
+    readme.startsWith("# AI Commit & Prompt Helper v2.0.6"),
     "README title should describe the current release"
   );
   assert.ok(
-    readme.includes("Current extension release: `v2.0.5`."),
+    readme.includes("Current extension release: `v2.0.6`."),
     "README current release line should match the package version"
   );
   assert.ok(
-    configuration.includes("Applies to extension release: `v2.0.5`."),
+    configuration.includes("Applies to extension release: `v2.0.6`."),
     "configuration docs should describe the current release"
   );
 }
 
 function testProviderModelDefaultsStayWithinProvider(): void {
+  assert.equal(PROVIDER_MODE_DEFINITIONS.codexCli.defaultModel, "gpt-5.5");
+  assert.equal(PROVIDER_MODE_DEFINITIONS.openai.defaultModel, "gpt-5.5");
+  assert.ok(PROVIDER_MODE_DEFINITIONS.openai.modelOptions.includes("gpt-5.4-mini"));
+
   assert.equal(PROVIDER_MODE_DEFINITIONS.deepseek.defaultModel, "deepseek-v4-flash");
   assert.deepEqual(PROVIDER_MODE_DEFINITIONS.deepseek.modelOptions, [
     "deepseek-v4-flash",
@@ -162,6 +166,14 @@ function testProviderModelDefaultsStayWithinProvider(): void {
     resolveConfiguredModelForProvider("deepseek", "deepseek-v4-pro"),
     "deepseek-v4-pro"
   );
+  assert.equal(PROVIDER_MODE_DEFINITIONS.anthropic.defaultModel, "claude-opus-4-1-20250805");
+  assert.ok(PROVIDER_MODE_DEFINITIONS.anthropic.modelOptions.includes("claude-sonnet-4-20250514"));
+  assert.equal(PROVIDER_MODE_DEFINITIONS.cohere.defaultModel, "command-a-plus-05-2026");
+  assert.ok(PROVIDER_MODE_DEFINITIONS.cohere.modelOptions.includes("command-a-reasoning-08-2025"));
+  assert.equal(PROVIDER_MODE_DEFINITIONS.gemini.defaultModel, "gemini-3.5-flash");
+  assert.ok(PROVIDER_MODE_DEFINITIONS.gemini.modelOptions.includes("gemini-3.1-pro-preview"));
+  assert.equal(PROVIDER_MODE_DEFINITIONS.mistral.defaultModel, "mistral-medium-latest");
+  assert.ok(PROVIDER_MODE_DEFINITIONS.mistral.modelOptions.includes("ministral-14b-latest"));
   assert.equal(
     PROVIDER_MODE_DEFINITIONS.customOpenAiCompatible.defaultModel,
     "",
@@ -174,17 +186,19 @@ function testHuggingFaceProviderMetadata(): void {
 
   assert.equal(normalizeGenerationProvider("huggingface"), "huggingface");
   assert.equal(getProviderLabel("huggingface"), "Hugging Face");
-  assert.equal(getDefaultModelForProvider("huggingface"), "openai/gpt-oss-20b:cheapest");
+  assert.equal(getDefaultModelForProvider("huggingface"), "openai/gpt-oss-120b");
   assert.equal(definition.defaultBaseUrl, "https://router.huggingface.co/v1");
   assert.equal(definition.secretKey, "aiCommitPromptHelper.secret.huggingface");
-  assert.ok(definition.modelOptions.includes("openai/gpt-oss-120b:cheapest"));
+  assert.ok(definition.modelOptions.includes("Qwen/Qwen3-Coder-480B-A35B-Instruct"));
 }
 
 function testOpenRouterLowCostPresets(): void {
   const definition = PROVIDER_MODE_DEFINITIONS.openrouter;
 
-  assert.ok(definition.modelOptions.includes("openai/gpt-5.2-mini"));
-  assert.ok(definition.modelOptions.includes("google/gemini-2.5-flash"));
+  assert.equal(definition.defaultModel, "openai/gpt-5.5");
+  assert.ok(definition.modelOptions.includes("google/gemini-3.5-flash"));
+  assert.ok(definition.modelOptions.includes("anthropic/claude-opus-4.8"));
+  assert.ok(definition.modelOptions.includes("mistralai/mistral-medium-3-5"));
   assert.equal(definition.secretKey, "aiCommitPromptHelper.secret.openrouter");
 }
 

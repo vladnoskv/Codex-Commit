@@ -2,7 +2,7 @@
 
 This document shows practical `settings.json` examples for **AI Commit & Prompt Helper**.
 
-Applies to extension release: `v2.0.5`.
+Applies to extension release: `v2.0.6`.
 
 ## Visual Preview
 
@@ -46,7 +46,7 @@ OpenAI:
 ```json
 {
   "codexCommitWidget.provider": "openai",
-  "codexCommitWidget.model": "gpt-5.4-mini",
+  "codexCommitWidget.model": "gpt-5.5",
   "codexCommitWidget.openAiApiKey": ""
 }
 ```
@@ -76,7 +76,7 @@ Google Gemini:
 ```json
 {
   "codexCommitWidget.provider": "gemini",
-  "codexCommitWidget.model": "gemini-2.5-flash",
+  "codexCommitWidget.model": "gemini-3.5-flash",
   "codexCommitWidget.geminiApiKey": ""
 }
 ```
@@ -86,7 +86,7 @@ Mistral, Cohere, OpenRouter, Hugging Face, and custom OpenAI-compatible endpoint
 ```json
 {
   "codexCommitWidget.provider": "mistral",
-  "codexCommitWidget.model": "mistral-small-latest",
+  "codexCommitWidget.model": "mistral-medium-latest",
   "codexCommitWidget.mistralApiKey": ""
 }
 ```
@@ -94,7 +94,7 @@ Mistral, Cohere, OpenRouter, Hugging Face, and custom OpenAI-compatible endpoint
 ```json
 {
   "codexCommitWidget.provider": "cohere",
-  "codexCommitWidget.model": "command-a-03-2025",
+  "codexCommitWidget.model": "command-a-plus-05-2026",
   "codexCommitWidget.cohereApiKey": ""
 }
 ```
@@ -102,7 +102,7 @@ Mistral, Cohere, OpenRouter, Hugging Face, and custom OpenAI-compatible endpoint
 ```json
 {
   "codexCommitWidget.provider": "openrouter",
-  "codexCommitWidget.model": "openai/gpt-5.2-mini",
+  "codexCommitWidget.model": "openai/gpt-5.5",
   "codexCommitWidget.openRouterApiKey": ""
 }
 ```
@@ -110,7 +110,7 @@ Mistral, Cohere, OpenRouter, Hugging Face, and custom OpenAI-compatible endpoint
 ```json
 {
   "codexCommitWidget.provider": "huggingface",
-  "codexCommitWidget.model": "openai/gpt-oss-20b:cheapest",
+  "codexCommitWidget.model": "openai/gpt-oss-120b",
   "codexCommitWidget.huggingFaceApiKey": ""
 }
 ```
@@ -143,12 +143,16 @@ Model refresh and pricing:
 - Pricing appears only when a provider returns token billing metadata. If pricing is not present, the model still appears without cost text.
 - DeepSeek is restricted to the supported API model names `deepseek-v4-flash` and `deepseek-v4-pro`.
 
-Low-cost provider presets:
+Current provider presets:
 
-- OpenRouter: `openai/gpt-5.2-mini`, `google/gemini-2.5-flash`, `deepseek/deepseek-chat`, `qwen/qwen3-coder`
-- Hugging Face: `openai/gpt-oss-20b:cheapest`, `openai/gpt-oss-120b:cheapest`, `deepseek-ai/DeepSeek-R1:cheapest`
-- Mistral: `mistral-small-latest`
-- Gemini: `gemini-2.5-flash`
+- OpenAI: `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`
+- DeepSeek: `deepseek-v4-flash`, `deepseek-v4-pro`
+- Anthropic: `claude-opus-4-1-20250805`, `claude-sonnet-4-20250514`
+- Cohere: `command-a-plus-05-2026`, `command-a-03-2025`, `command-a-reasoning-08-2025`
+- Gemini: `gemini-3.5-flash`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`
+- Mistral: `mistral-medium-latest`, `mistral-large-latest`, `mistral-small-latest`, `ministral-14b-latest`
+- OpenRouter: `openai/gpt-5.5`, `google/gemini-3.5-flash`, `deepseek/deepseek-v4-flash`, `qwen/qwen3.7-max`
+- Hugging Face: `openai/gpt-oss-120b`, `Qwen/Qwen3-Coder-480B-A35B-Instruct`, `deepseek-ai/DeepSeek-R1`
 
 ## CLI Setup
 

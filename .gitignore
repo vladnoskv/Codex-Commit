@@ -18,6 +18,9 @@ Thumbs.db
 *.swp
 *.swo
 .env
+.env.*
+*.env
+!.env.example
 
 # Admin-only local docs
 ADMIN_ONLY_PUSH.md

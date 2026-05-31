@@ -9,4 +9,7 @@ dist/**/*.map
 dist/selfTest.js
 media/logo.svg
 .env
+.env.*
+*.env
+!.env.example
 ADMIN_ONLY_PUSH.md

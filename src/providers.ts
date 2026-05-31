@@ -30,7 +30,7 @@ export type ProviderModeDefinition = {
   requiresCustomBaseUrl: boolean;
 };
 
-const DEFAULT_MODEL = "gpt-5.4-mini";
+const DEFAULT_MODEL = "gpt-5.5";
 const SECRET_PREFIX = "aiCommitPromptHelper.secret";
 
 export const GENERIC_API_KEY_SECRET_KEY = `${SECRET_PREFIX}.apiKey`;
@@ -71,8 +71,8 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
   openai: {
     provider: "openai",
     label: "OpenAI",
-    defaultModel: "gpt-5.4-mini",
-    modelOptions: ["gpt-5.4-mini", "gpt-5.4-nano"],
+    defaultModel: "gpt-5.5",
+    modelOptions: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
     apiKeySetting: "openAiApiKey",
     apiKeyLabel: "OpenAI API key",
     apiKeyEnvironment: "OPENAI_API_KEY",
@@ -104,7 +104,13 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
     provider: "anthropic",
     label: "Anthropic Claude",
     defaultModel: "claude-opus-4-1-20250805",
-    modelOptions: ["claude-opus-4-1-20250805", "claude-sonnet-4-5"],
+    modelOptions: [
+      "claude-opus-4-1-20250805",
+      "claude-opus-4-20250514",
+      "claude-sonnet-4-20250514",
+      "claude-3-7-sonnet-20250219",
+      "claude-3-5-haiku-20241022"
+    ],
     apiKeySetting: "anthropicApiKey",
     apiKeyLabel: "Anthropic API key",
     apiKeyEnvironment: "ANTHROPIC_API_KEY",
@@ -119,8 +125,20 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
   cohere: {
     provider: "cohere",
     label: "Cohere",
-    defaultModel: "command-a-03-2025",
-    modelOptions: ["command-a-03-2025"],
+    defaultModel: "command-a-plus-05-2026",
+    modelOptions: [
+      "command-a-plus-05-2026",
+      "command-a-03-2025",
+      "command-a-reasoning-08-2025",
+      "command-a-translate-08-2025",
+      "command-a-vision-07-2025",
+      "command-r7b-12-2024",
+      "command-r-plus-08-2024",
+      "command-r-08-2024",
+      "tiny-aya-global",
+      "tiny-aya-earth",
+      "tiny-aya-fire"
+    ],
     apiKeySetting: "cohereApiKey",
     apiKeyLabel: "Cohere API key",
     apiKeyEnvironment: "COHERE_API_KEY",
@@ -135,8 +153,16 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
   gemini: {
     provider: "gemini",
     label: "Google Gemini",
-    defaultModel: "gemini-2.5-flash",
-    modelOptions: ["gemini-2.5-flash", "gemini-2.5-flash-lite"],
+    defaultModel: "gemini-3.5-flash",
+    modelOptions: [
+      "gemini-3.5-flash",
+      "gemini-3.1-pro-preview",
+      "gemini-3.1-flash-lite",
+      "gemini-3-flash-preview",
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite"
+    ],
     apiKeySetting: "geminiApiKey",
     apiKeyLabel: "Google Gemini API key",
     apiKeyEnvironment: "GEMINI_API_KEY or GOOGLE_API_KEY",
@@ -151,8 +177,22 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
   mistral: {
     provider: "mistral",
     label: "Mistral",
-    defaultModel: "mistral-small-latest",
-    modelOptions: ["mistral-small-latest", "mistral-large-latest"],
+    defaultModel: "mistral-medium-latest",
+    modelOptions: [
+      "mistral-medium-latest",
+      "mistral-large-latest",
+      "mistral-small-latest",
+      "ministral-14b-latest",
+      "ministral-8b-latest",
+      "ministral-3b-latest",
+      "devstral-latest",
+      "devstral-small-latest",
+      "magistral-medium-latest",
+      "magistral-small-latest",
+      "codestral-latest",
+      "voxtral-small-latest",
+      "labs-mistral-small-creative"
+    ],
     apiKeySetting: "mistralApiKey",
     apiKeyLabel: "Mistral API key",
     apiKeyEnvironment: "MISTRAL_API_KEY",
@@ -167,12 +207,22 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
   openrouter: {
     provider: "openrouter",
     label: "OpenRouter",
-    defaultModel: "openai/gpt-5.2-mini",
+    defaultModel: "openai/gpt-5.5",
     modelOptions: [
-      "openai/gpt-5.2-mini",
-      "google/gemini-2.5-flash",
-      "deepseek/deepseek-chat",
-      "qwen/qwen3-coder"
+      "openai/gpt-5.5",
+      "openai/gpt-5.4",
+      "openai/gpt-5.4-mini",
+      "anthropic/claude-opus-4.8",
+      "anthropic/claude-opus-4.8-fast",
+      "google/gemini-3.5-flash",
+      "google/gemini-3.1-flash-lite",
+      "deepseek/deepseek-v4-flash",
+      "deepseek/deepseek-v4-pro",
+      "qwen/qwen3.7-max",
+      "x-ai/grok-4.3",
+      "x-ai/grok-build-0.1",
+      "mistralai/mistral-medium-3-5",
+      "openrouter/owl-alpha"
     ],
     apiKeySetting: "openRouterApiKey",
     apiKeyLabel: "OpenRouter API key",
@@ -188,12 +238,17 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
   huggingface: {
     provider: "huggingface",
     label: "Hugging Face",
-    defaultModel: "openai/gpt-oss-20b:cheapest",
+    defaultModel: "openai/gpt-oss-120b",
     modelOptions: [
-      "openai/gpt-oss-20b:cheapest",
-      "openai/gpt-oss-120b:cheapest",
-      "deepseek-ai/DeepSeek-R1:cheapest",
-      "openai/gpt-oss-20b:fastest"
+      "openai/gpt-oss-120b",
+      "openai/gpt-oss-20b",
+      "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+      "Qwen/Qwen3-4B-Thinking-2507",
+      "Qwen/Qwen2.5-7B-Instruct-1M",
+      "Qwen/Qwen2.5-Coder-32B-Instruct",
+      "deepseek-ai/DeepSeek-R1",
+      "zai-org/GLM-4.5",
+      "google/gemma-2-2b-it"
     ],
     apiKeySetting: "huggingFaceApiKey",
     apiKeyLabel: "Hugging Face token",

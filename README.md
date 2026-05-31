@@ -1,12 +1,17 @@
-# AI Commit & Prompt Helper v2.0.5
+# AI Commit & Prompt Helper v2.0.6
 
 ![AI Commit & Prompt Helper logo](media/logo.png)
 
 Generate structured, review-friendly AI commit messages from staged Git changes and improve coding prompts in VS Code using Codex CLI, OpenRouter, Hugging Face, and OpenAI-compatible LLM APIs.
 
-Current extension release: `v2.0.5`.
+Current extension release: `v2.0.6`.
 
 ## Release Notes
+
+### v2.0.6
+
+- Refreshed bundled fallback model lists and defaults for OpenAI, DeepSeek, Anthropic, Cohere, Gemini, Mistral, OpenRouter, and Hugging Face using current provider model docs and model-list endpoints.
+- Updated the default Codex/OpenAI model to `gpt-5.5` and switched Gemini, Cohere, Mistral, OpenRouter, and Hugging Face defaults to currently documented model IDs.
 
 ### v2.0.5
 
@@ -92,11 +97,11 @@ also shows token pricing when the provider returns billing metadata. Fallback mo
 are bundled so setup still works if a provider does not expose model listing or a network
 request fails.
 
-Low-cost presets are included for providers that support broad routing:
+Current routed presets are included for providers that support broad model routing:
 
-- OpenRouter: `openai/gpt-5.2-mini`, `google/gemini-2.5-flash`, `deepseek/deepseek-chat`, `qwen/qwen3-coder`
-- Hugging Face: `openai/gpt-oss-20b:cheapest`, `openai/gpt-oss-120b:cheapest`, `deepseek-ai/DeepSeek-R1:cheapest`
-- Mistral, Gemini, and DeepSeek default toward smaller/flash-style models where practical.
+- OpenRouter: `openai/gpt-5.5`, `openai/gpt-5.4-mini`, `google/gemini-3.5-flash`, `deepseek/deepseek-v4-flash`, `qwen/qwen3.7-max`, `mistralai/mistral-medium-3-5`
+- Hugging Face: `openai/gpt-oss-120b`, `Qwen/Qwen3-Coder-480B-A35B-Instruct`, `deepseek-ai/DeepSeek-R1`, `zai-org/GLM-4.5`
+- Mistral, Gemini, Cohere, DeepSeek, and OpenAI defaults use current provider-documented model IDs.
 
 ## What It Sends
 
