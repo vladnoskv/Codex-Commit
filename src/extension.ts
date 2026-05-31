@@ -12,7 +12,9 @@ import {
   type ProviderModeDefinition,
   type ReasoningEffort,
   getDefaultModelForProvider,
+  getCodexCliModelFallbackForVersion,
   getProviderLabel,
+  isCodexCliModelBlockedByVersion,
   normalizeGenerationProvider,
   resolveConfiguredModelForProvider,
   resolveApiKeyValue
@@ -111,6 +113,8 @@ type CodexCliPanelStatus = CodexCliAuthStatus & {
   version: string;
 };
 
+type Semver = [number, number, number];
+
 const CONFIG_SECTION = "codexCommitWidget";
 const LEGACY_CONFIG_SECTION = "aiCommitPromptHelper";
 const COMMAND_ID = "codexCommitWidget.generateCommitMessage";
@@ -136,6 +140,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_ANALYTICS_RETENTION_DAYS = 7;
 let hasShownOutdatedCodexVersionWarning = false;
 let hasCheckedCodexCliVersion = false;
+let hasShownCodexModelCompatibilityWarning = false;
 let settingsPanel: vscode.WebviewPanel | null = null;
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -2336,11 +2341,20 @@ function normalizeRepositoryName(repositoryPath: string): string {
   return name || "(unknown)";
 }
 
-function buildCodexExecArgs(settings: GenerationSettings, outputLastMessageFile: string): string[] {
+function buildCodexExecArgs(
+  settings: GenerationSettings,
+  outputLastMessageFile: string,
+  cliVersion: Semver | null = null
+): string[] {
   const args = ["exec", "--output-last-message", outputLastMessageFile];
+  const cliVersionText = cliVersion ? formatSemver(cliVersion) : "";
+  const fallbackModel = settings.model
+    ? getCodexCliModelFallbackForVersion(settings.model, cliVersionText)
+    : null;
+  const model = fallbackModel ?? settings.model;
 
-  if (settings.model) {
-    args.push("--model", settings.model);
+  if (model) {
+    args.push("--model", model);
   }
 
   args.push("-c", `model_reasoning_effort=${settings.reasoningEffort}`);
@@ -2836,7 +2850,22 @@ function formatPerMillionTokenCost(value: unknown): string {
 
 async function generateWithCodex(request: TextGenerationRequest): Promise<GeneratedTextResult> {
   const outputLastMessageFile = getOutputLastMessageTempPath();
-  const args = buildCodexExecArgs(request.settings, outputLastMessageFile);
+  const codexCliVersion = await getCodexCliVersion(request.settings.codexCommand, request.cwd);
+  if (
+    codexCliVersion &&
+    request.settings.model &&
+    isCodexCliModelBlockedByVersion(request.settings.model, formatSemver(codexCliVersion))
+  ) {
+    await warnAboutBlockedCodexCliModel(
+      request.settings.model,
+      getCodexCliModelFallbackForVersion(
+        request.settings.model,
+        formatSemver(codexCliVersion)
+      ),
+      codexCliVersion
+    );
+  }
+  const args = buildCodexExecArgs(request.settings, outputLastMessageFile, codexCliVersion);
 
   return generateRawTextWithCodex({
     provider: request.settings.provider,
@@ -2846,7 +2875,8 @@ async function generateWithCodex(request: TextGenerationRequest): Promise<Genera
     prompt: request.prompt,
     cwd: request.cwd,
     outputLastMessageFile,
-    trackTokenUsage: request.trackTokenUsage
+    trackTokenUsage: request.trackTokenUsage,
+    codexCliVersion
   });
 }
 
@@ -3470,6 +3500,7 @@ async function generateRawTextWithCodex(options: {
   cwd: string;
   outputLastMessageFile: string;
   trackTokenUsage: boolean;
+  codexCliVersion: Semver | null;
 }): Promise<GeneratedTextResult> {
   const {
     provider,
@@ -3479,7 +3510,8 @@ async function generateRawTextWithCodex(options: {
     prompt,
     cwd,
     outputLastMessageFile,
-    trackTokenUsage
+    trackTokenUsage,
+    codexCliVersion
   } = options;
 
   try {
@@ -3498,7 +3530,7 @@ async function generateRawTextWithCodex(options: {
       }
     }
 
-    await warnIfCodexCliOutdated(codexCommand, cwd);
+    await warnIfCodexCliOutdated(codexCommand, cwd, codexCliVersion);
 
     const { stdout, stderr } = await runCodexCli(codexCommand, args, cwd, prompt);
     const outputLastMessage = await readOutputLastMessage(outputLastMessageFile);
@@ -3539,13 +3571,17 @@ async function tryGenerateViaExtensionCommand(
   }
 }
 
-async function warnIfCodexCliOutdated(codexCommand: string, cwd: string): Promise<void> {
+async function warnIfCodexCliOutdated(
+  codexCommand: string,
+  cwd: string,
+  detectedVersion: Semver | null = null
+): Promise<void> {
   if (hasShownOutdatedCodexVersionWarning || hasCheckedCodexCliVersion) {
     return;
   }
   hasCheckedCodexCliVersion = true;
 
-  const parsedVersion = await getCodexCliVersion(codexCommand, cwd);
+  const parsedVersion = detectedVersion ?? (await getCodexCliVersion(codexCommand, cwd));
   if (!parsedVersion) {
     return;
   }
@@ -3560,7 +3596,7 @@ async function warnIfCodexCliOutdated(codexCommand: string, cwd: string): Promis
   }
 
   hasShownOutdatedCodexVersionWarning = true;
-  const current = `${parsedVersion[0]}.${parsedVersion[1]}.${parsedVersion[2]}`;
+  const current = formatSemver(parsedVersion);
   void vscode.window.showWarningMessage(
     `Codex CLI ${current} detected. This extension is tuned for Codex CLI ${MIN_RECOMMENDED_CODEX_VERSION}+; upgrade to the latest version for best compatibility.`
   );
@@ -3569,7 +3605,7 @@ async function warnIfCodexCliOutdated(codexCommand: string, cwd: string): Promis
 async function getCodexCliVersion(
   codexCommand: string,
   cwd: string
-): Promise<[number, number, number] | null> {
+): Promise<Semver | null> {
   const candidates = getCodexCliCandidates(codexCommand);
 
   for (const candidate of candidates) {
@@ -3602,6 +3638,24 @@ async function getCodexCliVersion(
   return null;
 }
 
+async function warnAboutBlockedCodexCliModel(
+  model: string,
+  fallbackModel: string | null,
+  cliVersion: Semver
+): Promise<void> {
+  if (hasShownCodexModelCompatibilityWarning) {
+    return;
+  }
+
+  hasShownCodexModelCompatibilityWarning = true;
+  const fallbackText = fallbackModel
+    ? `Using ${fallbackModel} for this run.`
+    : "Using the CLI default model for this run.";
+  void vscode.window.showWarningMessage(
+    `Codex CLI ${formatSemver(cliVersion)} does not support ${model}. ${fallbackText} To use ${model}, run \`npm install -g @openai/codex@latest\`, restart VS Code, and check Codex status again.`
+  );
+}
+
 function parseSemver(text: string): [number, number, number] | null {
   const match = text.match(/(?:codex(?:-cli)?\s+)?(\d+)\.(\d+)\.(\d+)/i);
   if (!match) {
@@ -3618,9 +3672,13 @@ function parseSemver(text: string): [number, number, number] | null {
   return [major, minor, patch];
 }
 
+function formatSemver(version: Semver): string {
+  return `${version[0]}.${version[1]}.${version[2]}`;
+}
+
 function compareSemver(
-  left: [number, number, number],
-  right: [number, number, number]
+  left: Semver,
+  right: Semver
 ): number {
   for (let i = 0; i < 3; i += 1) {
     if (left[i] > right[i]) {
@@ -3676,6 +3734,10 @@ async function runCodexCli(
           return { stdout, stderr };
         }
         throw new Error(getNoLastAgentMessageError(details));
+      }
+
+      if (isCodexCliUpgradeRequiredText(details)) {
+        throw new Error(getCodexCliUpgradeRequiredMessage(candidate, details));
       }
 
       throw new Error(`Codex CLI failed using \`${candidate}\`.\n\n${details}`);
@@ -3751,6 +3813,14 @@ function isNoLastAgentMessageText(text: string): boolean {
   );
 }
 
+function isCodexCliUpgradeRequiredText(text: string): boolean {
+  const normalized = normalizeWhitespace(text);
+  return (
+    normalized.includes("requires a newer version of codex") ||
+    normalized.includes("upgrade to the latest app or cli")
+  );
+}
+
 function getAuthRequiredMessage(
   failures: Array<{ candidate: string; details: string }> | string
 ): string {
@@ -3781,6 +3851,19 @@ function getNoLastAgentMessageError(details: string): string {
   return (
     "Codex CLI completed without a final assistant message, so no commit message could be extracted.\n" +
     "Use Check Codex Status in the setup panel, or run `codex login status` with the configured command. If status fails, run `codex login` and try again. If you're already logged in, retry once and ensure your Codex CLI is up to date." +
+    suffix
+  );
+}
+
+function getCodexCliUpgradeRequiredMessage(candidate: string, details: string): string {
+  const compactDetails = details.trim();
+  const suffix = compactDetails
+    ? `\n\nDetails:\n${compactDetails.split(/\r?\n/).slice(0, 6).join("\n")}`
+    : "";
+
+  return (
+    `Codex CLI at \`${candidate}\` must be updated before this model can be used.\n` +
+    "Run `npm install -g @openai/codex@latest`, restart VS Code, then use Check Codex Status in the setup panel before trying again." +
     suffix
   );
 }

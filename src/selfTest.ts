@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   PROVIDER_MODE_DEFINITIONS,
+  getCodexCliModelFallbackForVersion,
   getDefaultModelForProvider,
   getProviderLabel,
+  isCodexCliModelBlockedByVersion,
   normalizeGenerationProvider,
   resolveConfiguredModelForProvider,
   resolveApiKeyValue
@@ -158,6 +160,11 @@ function testSidebarActionOnlyOpensSettings(): void {
     "Codex CLI auth status should fall back to safe local auth metadata when CLI status is stale"
   );
   assert.ok(
+    extensionSource.includes("isCodexCliModelBlockedByVersion") &&
+      extensionSource.includes("getCodexCliUpgradeRequiredMessage"),
+    "Codex CLI execution should be version-aware and explain required CLI updates"
+  );
+  assert.ok(
     extensionSource.includes("getConfigurationUpdateTarget"),
     "settings saves should update the effective configuration target instead of only global settings"
   );
@@ -200,6 +207,31 @@ function testDocsMatchCurrentRelease(): void {
 
 function testProviderModelDefaultsStayWithinProvider(): void {
   assert.equal(PROVIDER_MODE_DEFINITIONS.codexCli.defaultModel, "gpt-5.5");
+  assert.equal(PROVIDER_MODE_DEFINITIONS.codexExtensionThenCli.defaultModel, "gpt-5.5");
+  assert.ok(
+    isCodexCliModelBlockedByVersion("gpt-5.5", "0.120.0"),
+    "Codex CLI 0.120.0 should not receive gpt-5.5"
+  );
+  assert.equal(
+    getCodexCliModelFallbackForVersion("gpt-5.5", "0.120.0"),
+    "gpt-5.4",
+    "Codex CLI 0.120.0 should use the verified gpt-5.4 fallback"
+  );
+  assert.ok(
+    !isCodexCliModelBlockedByVersion("gpt-5.5", "0.120.1"),
+    "newer Codex CLI builds should be allowed to try gpt-5.5"
+  );
+  assert.equal(getCodexCliModelFallbackForVersion("gpt-5.5", "0.120.1"), null);
+  assert.equal(
+    resolveConfiguredModelForProvider("codexCli", "gpt-5.5"),
+    "gpt-5.5",
+    "Codex CLI model resolution should keep the configured model until version-aware execution"
+  );
+  assert.equal(
+    resolveConfiguredModelForProvider("codexCli", "gpt-5.4"),
+    "gpt-5.4",
+    "custom Codex CLI model IDs should still be preserved"
+  );
   assert.equal(PROVIDER_MODE_DEFINITIONS.openai.defaultModel, "gpt-5.5");
   assert.ok(PROVIDER_MODE_DEFINITIONS.openai.modelOptions.includes("gpt-5.4-mini"));
 

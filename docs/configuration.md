@@ -164,6 +164,8 @@ If Codex CLI is installed globally but not detected in VS Code:
 4. Use **Check Codex Status** to confirm the detected CLI, version, login state, and account label.
 5. Save settings.
 
+Codex CLI generation is version-aware. If the selected Codex model requires a newer CLI than the detected install, the extension uses a compatible fallback model for that run and shows the update command needed to use the newer model.
+
 ## Prompt Customization
 
 ```json

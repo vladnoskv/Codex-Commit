@@ -2,7 +2,7 @@
 
 ![AI Commit & Prompt Helper logo](media/logo.png)
 
-Generate structured, review-friendly AI commit messages from staged Git changes and improve coding prompts in VS Code using Codex CLI, OpenRouter, Hugging Face, and OpenAI-compatible LLM APIs.
+Generate structured, review-friendly AI commit messages from staged Git changes and improve coding prompts in VS Code using Codex CLI, OpenRouter, Hugging Face, and OpenAI-compatible LLM APIs. 
 
 Current extension release: `v2.0.7`.
 

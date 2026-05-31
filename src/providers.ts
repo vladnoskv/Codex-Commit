@@ -32,6 +32,12 @@ export type ProviderModeDefinition = {
 
 const DEFAULT_MODEL = "gpt-5.5";
 const SECRET_PREFIX = "aiCommitPromptHelper.secret";
+const CODEX_CLI_MODEL_COMPATIBILITY: Record<
+  string,
+  { blockedThrough: string; fallbackModel: string }
+> = {
+  "gpt-5.5": { blockedThrough: "0.120.0", fallbackModel: "gpt-5.4" }
+};
 
 export const GENERIC_API_KEY_SECRET_KEY = `${SECRET_PREFIX}.apiKey`;
 
@@ -321,6 +327,64 @@ export function resolveConfiguredModelForProvider(
   }
 
   return definition.modelOptions.includes(trimmed) ? trimmed : definition.defaultModel;
+}
+
+export function isCodexCliModelBlockedByVersion(model: string, cliVersion: string): boolean {
+  const compatibility = CODEX_CLI_MODEL_COMPATIBILITY[model.trim()];
+  if (!compatibility) {
+    return false;
+  }
+
+  const parsedCliVersion = parseSemver(cliVersion);
+  const parsedBlockedThrough = parseSemver(compatibility.blockedThrough);
+  if (!parsedCliVersion || !parsedBlockedThrough) {
+    return false;
+  }
+
+  return compareSemver(parsedCliVersion, parsedBlockedThrough) <= 0;
+}
+
+export function getCodexCliModelFallbackForVersion(
+  model: string,
+  cliVersion: string
+): string | null {
+  const compatibility = CODEX_CLI_MODEL_COMPATIBILITY[model.trim()];
+  if (!compatibility || !isCodexCliModelBlockedByVersion(model, cliVersion)) {
+    return null;
+  }
+
+  return compatibility.fallbackModel;
+}
+
+function parseSemver(text: string): [number, number, number] | null {
+  const match = text.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) {
+    return null;
+  }
+
+  const major = Number.parseInt(match[1], 10);
+  const minor = Number.parseInt(match[2], 10);
+  const patch = Number.parseInt(match[3], 10);
+  if (![major, minor, patch].every((part) => Number.isFinite(part))) {
+    return null;
+  }
+
+  return [major, minor, patch];
+}
+
+function compareSemver(
+  left: [number, number, number],
+  right: [number, number, number]
+): number {
+  for (let i = 0; i < 3; i += 1) {
+    if (left[i] > right[i]) {
+      return 1;
+    }
+    if (left[i] < right[i]) {
+      return -1;
+    }
+  }
+  return 0;
 }
 
 export function getProviderLabel(provider: GenerationProvider): string {
