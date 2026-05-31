@@ -37,7 +37,10 @@ function testPackageContributionIdsUseExtensionNamespace(): void {
     contributes: {
       commands: Array<{ command: string }>;
       configuration: { properties: Record<string, unknown> };
-      views: Record<string, Array<{ id: string; icon?: string; name?: string; when?: string }>>;
+      views: Record<
+        string,
+        Array<{ id: string; icon?: string; name?: string; type?: string; when?: string }>
+      >;
       viewsContainers: { activitybar: Array<{ id: string }> };
       menus: Record<string, Array<{ command: string }>>;
     };
@@ -76,6 +79,12 @@ function testPackageContributionIdsUseExtensionNamespace(): void {
       .flat()
       .every((view) => view.name === "Settings"),
     "AI Helper Activity Bar view should be named Settings, not Actions"
+  );
+  assert.ok(
+    Object.values(packageManifest.contributes.views)
+      .flat()
+      .every((view) => view.type === "webview"),
+    "sidebar view must be contributed as a webview so VS Code uses the registered WebviewViewProvider"
   );
   assert.ok(
     (packageManifest.activationEvents ?? []).every(
@@ -126,15 +135,15 @@ function testDocsMatchCurrentRelease(): void {
   const configuration = readFileSync(join(__dirname, "..", "docs", "configuration.md"), "utf8");
 
   assert.ok(
-    readme.startsWith("# AI Commit & Prompt Helper v2.0.4"),
+    readme.startsWith("# AI Commit & Prompt Helper v2.0.5"),
     "README title should describe the current release"
   );
   assert.ok(
-    readme.includes("Current extension release: `v2.0.4`."),
+    readme.includes("Current extension release: `v2.0.5`."),
     "README current release line should match the package version"
   );
   assert.ok(
-    configuration.includes("Applies to extension release: `v2.0.4`."),
+    configuration.includes("Applies to extension release: `v2.0.5`."),
     "configuration docs should describe the current release"
   );
 }

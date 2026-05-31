@@ -2,7 +2,7 @@
 
 This document shows practical `settings.json` examples for **AI Commit & Prompt Helper**.
 
-Applies to extension release: `v2.0.4`.
+Applies to extension release: `v2.0.5`.
 
 ## Visual Preview
 
