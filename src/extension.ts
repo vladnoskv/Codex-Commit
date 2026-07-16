@@ -27,6 +27,10 @@ import {
   parseReleaseCommitsFromGitLog,
   suggestSemverBumpFromCommits
 } from "./releaseAssistant";
+import {
+  buildProviderSystemPrompt,
+  type GenerationTask
+} from "./providerPrompts";
 
 const execFileAsync = promisify(execFile);
 
@@ -53,6 +57,7 @@ type GenerationSettings = {
   cohereApiKey: string;
   geminiApiKey: string;
   mistralApiKey: string;
+  zAiApiKey: string;
   openRouterApiKey: string;
   huggingFaceApiKey: string;
   customOpenAiCompatibleBaseUrl: string;
@@ -74,9 +79,11 @@ type GeneratedTextResult = {
 
 type TextGenerationRequest = {
   prompt: string;
+  task: GenerationTask;
   cwd: string;
   settings: GenerationSettings;
   trackTokenUsage: boolean;
+  signal: AbortSignal;
 };
 
 type ProviderClient = {
@@ -135,7 +142,7 @@ const LEGACY_IMPROVE_PROMPT_COMMAND_ID = "aiCommitPromptHelper.improvePrompt";
 const LEGACY_SETUP_CODEX_COMMAND_ID = "aiCommitPromptHelper.setupCodexCli";
 const LEGACY_OPEN_SETTINGS_COMMAND_ID = "aiCommitPromptHelper.openSettings";
 const SIDEBAR_VIEW_ID = "codexCommitWidget.sidebar";
-const MIN_RECOMMENDED_CODEX_VERSION = "0.120.0";
+const MIN_RECOMMENDED_CODEX_VERSION = "0.128.0";
 const DEFAULT_PROMPT_TEMPLATE =
   "You are generating a git commit message from staged changes. Return only the final commit message text: no preface, no code fences, no markdown wrapper, no explanations outside the commit message. Format output as: 1) one conventional-commit subject line under 72 chars, 2) blank line, 3) Change Summary section with concise bullets, 4) Files Changed section mapping key files to intent, 5) Audit Trail section with risks, behavior changes, and validation notes. Only include facts directly supported by the staged diff. If validation is not shown in the diff, say not run or not shown rather than inventing it.";
 const DEFAULT_STATUS_BAR_TEXT = "$(sparkle) AI Commit";
@@ -151,6 +158,14 @@ let hasShownOutdatedCodexVersionWarning = false;
 let hasCheckedCodexCliVersion = false;
 let hasShownCodexModelCompatibilityWarning = false;
 let settingsPanel: vscode.WebviewPanel | null = null;
+let settingsPanelRefreshTimer: NodeJS.Timeout | null = null;
+
+class GenerationCancelledError extends Error {
+  constructor() {
+    super("Generation cancelled.");
+    this.name = "GenerationCancelledError";
+  }
+}
 
 export async function activate(context: vscode.ExtensionContext) {
   const statusBar = vscode.window.createStatusBarItem(
@@ -232,6 +247,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     applyStatusBarText(statusBar);
     void updateStatusBarTooltip(context, statusBar);
+    scheduleSettingsPanelRefresh(context);
   });
 
   context.subscriptions.push(
@@ -468,6 +484,10 @@ async function openProviderModeSettingsPanel(
   panel.onDidDispose(
     () => {
       settingsPanel = null;
+      if (settingsPanelRefreshTimer) {
+        clearTimeout(settingsPanelRefreshTimer);
+        settingsPanelRefreshTimer = null;
+      }
     },
     undefined,
     context.subscriptions
@@ -521,6 +541,31 @@ async function readSettingsPanelState(
     analyticsEstimatedRuns: getConfiguredValue<number>("analyticsEstimatedRuns", 0),
     analyticsLastUpdated: getConfiguredValue<string>("analyticsLastUpdated", "never")
   };
+}
+
+async function refreshOpenSettingsPanel(context: vscode.ExtensionContext): Promise<void> {
+  const panel = settingsPanel;
+  if (!panel) {
+    return;
+  }
+
+  const state = await readSettingsPanelState(context, !isSetupComplete(context));
+  if (settingsPanel === panel) {
+    await panel.webview.postMessage({ type: "state", state });
+  }
+}
+
+function scheduleSettingsPanelRefresh(context: vscode.ExtensionContext): void {
+  if (!settingsPanel) {
+    return;
+  }
+  if (settingsPanelRefreshTimer) {
+    clearTimeout(settingsPanelRefreshTimer);
+  }
+  settingsPanelRefreshTimer = setTimeout(() => {
+    settingsPanelRefreshTimer = null;
+    void refreshOpenSettingsPanel(context);
+  }, 250);
 }
 
 async function handleSettingsPanelMessage(
@@ -844,14 +889,9 @@ function isAllowedModelSelection(
   model: string,
   context: vscode.ExtensionContext
 ): boolean {
-  if (!model) {
-    return true;
-  }
-  if (provider === "customOpenAiCompatible" || provider === "codexCli" || provider === "codexExtensionThenCli") {
-    return true;
-  }
-
-  return getAllowedProviderModelIds(provider, context).has(model);
+  void provider;
+  void context;
+  return !/[\r\n\0]/.test(model);
 }
 
 function normalizeModelForSave(
@@ -877,12 +917,7 @@ function resolveModelForGeneration(
   if (!model) {
     return getDefaultModelForProvider(provider);
   }
-  if (provider === "customOpenAiCompatible" || provider === "codexCli" || provider === "codexExtensionThenCli") {
-    return model;
-  }
-  if (getAllowedProviderModelIds(provider, context).has(model)) {
-    return model;
-  }
+  void context;
   return resolveConfiguredModelForProvider(provider, model);
 }
 
@@ -1542,7 +1577,7 @@ function renderSettingsPanelHtml(webview: vscode.Webview): string {
       });
       const entries = Array.from(entriesById.values());
       const knownModels = entries.map((entry) => entry.id);
-      const allowCustom = mode.provider === "customOpenAiCompatible" || mode.provider === "codexCli" || mode.provider === "codexExtensionThenCli";
+      const allowCustom = true;
       controls.modelChoice.replaceChildren();
       controls.modelChoice.appendChild(new Option("Use provider default", ""));
       entries.forEach((entry) => {
@@ -1874,6 +1909,40 @@ async function promptForSetupIfNeeded(context: vscode.ExtensionContext): Promise
   return true;
 }
 
+async function withCancellableGeneration<T>(
+  title: string,
+  operation: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  return vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title,
+      cancellable: true
+    },
+    async (_progress, token) => {
+      const controller = new AbortController();
+      const cancellation = token.onCancellationRequested(() => controller.abort());
+      try {
+        throwIfGenerationCancelled(controller.signal);
+        return await operation(controller.signal);
+      } finally {
+        cancellation.dispose();
+      }
+    }
+  );
+}
+
+function throwIfGenerationCancelled(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw new GenerationCancelledError();
+  }
+}
+
+function isGenerationCancelled(error: unknown): boolean {
+  return error instanceof GenerationCancelledError ||
+    (error instanceof Error && (error.name === "AbortError" || error.name === "CanceledError"));
+}
+
 async function generateCommitMessage(
   context: vscode.ExtensionContext,
   statusBar: vscode.StatusBarItem
@@ -1914,14 +1983,11 @@ async function generateCommitMessage(
   const settings = await readGenerationSettings(context);
 
   try {
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: `Generating commit message with ${getProviderLabel(settings.provider)}`,
-        cancellable: false
-      },
-      async () => {
+    await withCancellableGeneration(
+      `Generating commit message with ${getProviderLabel(settings.provider)}`,
+      async (signal) => {
         const stagedSummary = await getStagedContext(repo.rootUri.fsPath);
+        throwIfGenerationCancelled(signal);
 
         if (!stagedSummary.trim()) {
           throw new Error("No staged changes found. Stage your files first.");
@@ -1942,10 +2008,13 @@ async function generateCommitMessage(
 
         const generated = await generateTextWithSelectedProvider({
           prompt,
+          task: "commit",
           cwd: repo.rootUri.fsPath,
           settings,
-          trackTokenUsage: settings.trackTokenUsageAnalytics
+          trackTokenUsage: settings.trackTokenUsageAnalytics,
+          signal
         });
+        throwIfGenerationCancelled(signal);
 
         const message = normalizeCommitMessage(generated.raw);
 
@@ -1965,6 +2034,7 @@ async function generateCommitMessage(
           await updateStatusBarTooltip(context, statusBar);
         }
 
+        throwIfGenerationCancelled(signal);
         repo.inputBox.value = message;
         void vscode.window.showInformationMessage(
           `Commit message generated with ${getProviderLabel(settings.provider)}.`
@@ -1972,6 +2042,10 @@ async function generateCommitMessage(
       }
     );
   } catch (err: unknown) {
+    if (isGenerationCancelled(err)) {
+      void vscode.window.showInformationMessage("Commit generation cancelled. The Source Control message was not changed.");
+      return;
+    }
     const message =
       err instanceof Error ? err.message : "Unknown error while generating commit message.";
     void vscode.window.showErrorMessage(message);
@@ -1992,29 +2066,33 @@ async function improvePrompt(context: vscode.ExtensionContext): Promise<void> {
   const cwd = getPromptImprovementCwd(source.editor);
 
   try {
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: `Improving prompt with ${getProviderLabel(settings.provider)}`,
-        cancellable: false
-      },
-      async () => {
+    await withCancellableGeneration(
+      `Improving prompt with ${getProviderLabel(settings.provider)}`,
+      async (signal) => {
         const generated = await generateTextWithSelectedProvider({
           prompt: buildPromptImprovementPrompt(source.prompt),
+          task: "promptImprovement",
           cwd,
           settings,
-          trackTokenUsage: false
+          trackTokenUsage: false,
+          signal
         });
+        throwIfGenerationCancelled(signal);
         const improvedPrompt = normalizeImprovedPrompt(generated.raw);
 
         if (!improvedPrompt) {
           throw new Error(`${getProviderLabel(settings.provider)} returned an empty improved prompt.`);
         }
 
+        throwIfGenerationCancelled(signal);
         await reviewImprovedPrompt(source, improvedPrompt);
       }
     );
   } catch (err: unknown) {
+    if (isGenerationCancelled(err)) {
+      void vscode.window.showInformationMessage("Prompt improvement cancelled.");
+      return;
+    }
     const message = err instanceof Error ? err.message : "Unknown error while improving prompt.";
     void vscode.window.showErrorMessage(message);
   }
@@ -2063,14 +2141,11 @@ async function generateReleaseAssistant(context: vscode.ExtensionContext): Promi
   const settings = await readGenerationSettings(context);
 
   try {
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: `Generating release assistant with ${getProviderLabel(settings.provider)}`,
-        cancellable: false
-      },
-      async () => {
+    await withCancellableGeneration(
+      `Generating release assistant with ${getProviderLabel(settings.provider)}`,
+      async (signal) => {
         const releaseContext = await getReleaseHistoryContext(repo.rootUri.fsPath);
+        throwIfGenerationCancelled(signal);
         if (releaseContext.commits.length === 0) {
           throw new Error(
             `No commits found for release range ${releaseContext.rangeLabel}. Add commits after the latest tag or create a custom release from a branch with new history.`
@@ -2101,10 +2176,13 @@ async function generateReleaseAssistant(context: vscode.ExtensionContext): Promi
 
         const generated = await generateTextWithSelectedProvider({
           prompt,
+          task: "releaseAssistant",
           cwd: repo.rootUri.fsPath,
           settings,
-          trackTokenUsage: settings.trackTokenUsageAnalytics
+          trackTokenUsage: settings.trackTokenUsageAnalytics,
+          signal
         });
+        throwIfGenerationCancelled(signal);
         const markdown = normalizeGeneratedReleaseMarkdown(generated.raw);
         if (!markdown) {
           throw new Error(`${getProviderLabel(settings.provider)} returned empty release notes.`);
@@ -2118,11 +2196,16 @@ async function generateReleaseAssistant(context: vscode.ExtensionContext): Promi
           await syncTokenUsageAnalyticsSettings(context);
         }
 
+        throwIfGenerationCancelled(signal);
         await openReleaseAssistantDocument(markdown);
         void vscode.window.showInformationMessage("Release assistant output opened for review.");
       }
     );
   } catch (err: unknown) {
+    if (isGenerationCancelled(err)) {
+      void vscode.window.showInformationMessage("Release assistant generation cancelled.");
+      return;
+    }
     const message = err instanceof Error ? err.message : "Unknown error while generating release assistant output.";
     void vscode.window.showErrorMessage(message);
   }
@@ -2495,6 +2578,7 @@ async function readGenerationSettings(context: vscode.ExtensionContext): Promise
     cohereApiKey: providerSecrets.cohere || getConfiguredValue<string>("cohereApiKey", "").trim(),
     geminiApiKey: providerSecrets.gemini || getConfiguredValue<string>("geminiApiKey", "").trim(),
     mistralApiKey: providerSecrets.mistral || getConfiguredValue<string>("mistralApiKey", "").trim(),
+    zAiApiKey: providerSecrets.zai || getConfiguredValue<string>("zAiApiKey", "").trim(),
     openRouterApiKey: providerSecrets.openrouter || getConfiguredValue<string>("openRouterApiKey", "").trim(),
     huggingFaceApiKey: providerSecrets.huggingface || getConfiguredValue<string>("huggingFaceApiKey", "").trim(),
     customOpenAiCompatibleBaseUrl: getConfiguredValue<string>(
@@ -2779,6 +2863,13 @@ function getProviderClient(provider: GenerationProvider): ProviderClient {
         "https://api.mistral.ai/v1",
         (settings) => getApiKey(settings, "mistral")
       );
+    case "zai":
+      return createOpenAiCompatibleClient(
+        provider,
+        "Z.AI (GLM)",
+        "https://api.z.ai/api/paas/v4",
+        (settings) => getApiKey(settings, "zai")
+      );
     case "openrouter":
       return createOpenAiCompatibleClient(
         provider,
@@ -2832,7 +2923,7 @@ async function fetchAvailableModelsForPanel(
   }
 
   const apiKey = await resolvePanelApiKey(provider, values, context.secrets);
-  if (!apiKey) {
+  if (!apiKey && provider !== "customOpenAiCompatible") {
     throw new Error(getMissingApiKeyMessage(provider));
   }
 
@@ -2840,6 +2931,7 @@ async function fetchAvailableModelsForPanel(
     case "openai":
     case "deepseek":
     case "mistral":
+    case "zai":
     case "openrouter":
     case "huggingface":
     case "customOpenAiCompatible": {
@@ -2921,6 +3013,8 @@ function getProviderEnvironmentValues(provider: GenerationProvider): string[] {
       return [process.env.GEMINI_API_KEY ?? "", process.env.GOOGLE_API_KEY ?? ""];
     case "mistral":
       return [process.env.MISTRAL_API_KEY ?? ""];
+    case "zai":
+      return [process.env.ZAI_API_KEY ?? "", process.env.ZHIPUAI_API_KEY ?? ""];
     case "openrouter":
       return [process.env.OPENROUTER_API_KEY ?? ""];
     case "huggingface":
@@ -2972,9 +3066,6 @@ function extractOpenAiCompatibleModelEntries(
     .map((item) => {
       const entry = extractModelEntryFromRecord(item, source);
       if (!entry) {
-        return null;
-      }
-      if (provider === "deepseek" && !PROVIDER_MODE_DEFINITIONS.deepseek.modelOptions.includes(entry.id)) {
         return null;
       }
       return entry;
@@ -3073,7 +3164,11 @@ function formatPerMillionTokenCost(value: unknown): string {
 
 async function generateWithCodex(request: TextGenerationRequest): Promise<GeneratedTextResult> {
   const outputLastMessageFile = getOutputLastMessageTempPath();
-  const codexCliVersion = await getCodexCliVersion(request.settings.codexCommand, request.cwd);
+  const codexCliVersion = await getCodexCliVersion(
+    request.settings.codexCommand,
+    request.cwd,
+    request.signal
+  );
   if (
     codexCliVersion &&
     request.settings.model &&
@@ -3089,17 +3184,23 @@ async function generateWithCodex(request: TextGenerationRequest): Promise<Genera
     );
   }
   const args = buildCodexExecArgs(request.settings, outputLastMessageFile, codexCliVersion);
+  const systemPrompt = buildProviderSystemPrompt(
+    request.settings.provider,
+    request.settings.model,
+    request.task
+  );
 
   return generateRawTextWithCodex({
     provider: request.settings.provider,
     codexExtensionCommand: request.settings.codexExtensionCommand,
     codexCommand: request.settings.codexCommand,
     args,
-    prompt: request.prompt,
+    prompt: `${systemPrompt}\n\nTask input:\n${request.prompt}`,
     cwd: request.cwd,
     outputLastMessageFile,
     trackTokenUsage: request.trackTokenUsage,
-    codexCliVersion
+    codexCliVersion,
+    signal: request.signal
   });
 }
 
@@ -3124,21 +3225,35 @@ function createOpenAiCompatibleClient(
       }
 
       const apiKey = getKey(request.settings);
-      if (!apiKey) {
+      if (!apiKey && provider !== "customOpenAiCompatible") {
         throw new Error(getMissingApiKeyMessage(provider));
       }
 
+      const systemPrompt = buildProviderSystemPrompt(provider, request.settings.model, request.task);
       const body: Record<string, unknown> = {
         model: request.settings.model,
-        messages: [{ role: "user", content: request.prompt }]
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: request.prompt }
+        ]
       };
-      addSamplingOptions(body, request.settings, "max_tokens");
+      addSamplingOptions(
+        body,
+        request.settings,
+        provider === "openai" ? "max_completion_tokens" : "max_tokens"
+      );
+      if (provider === "openai") {
+        body.reasoning_effort = request.settings.reasoningEffort === "minimal"
+          ? "low"
+          : request.settings.reasoningEffort;
+      }
 
       const json = await postJson(
         `${baseUrl.replace(/\/+$/g, "")}/chat/completions`,
         buildOpenAiCompatibleHeaders(provider, apiKey),
         body,
-        label
+        label,
+        request.signal
       );
       const raw = extractTextFromOpenAiCompatibleResponse(json);
 
@@ -3157,9 +3272,11 @@ function buildOpenAiCompatibleHeaders(
   apiKey: string
 ): Record<string, string> {
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json"
   };
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
 
   if (provider === "openrouter") {
     headers["HTTP-Referer"] = "https://github.com/vladnoskv/Codex-Commit";
@@ -3180,6 +3297,7 @@ async function generateWithAnthropic(
   const body: Record<string, unknown> = {
     model: request.settings.model,
     max_tokens: request.settings.maxOutputTokensOverride ?? 1024,
+    system: buildProviderSystemPrompt("anthropic", request.settings.model, request.task),
     messages: [{ role: "user", content: request.prompt }]
   };
   addSamplingOptions(body, request.settings, "max_tokens");
@@ -3192,7 +3310,8 @@ async function generateWithAnthropic(
       "Content-Type": "application/json"
     },
     body,
-    "Anthropic Claude"
+    "Anthropic Claude",
+    request.signal
   );
   const raw = extractTextFromAnthropicResponse(json);
 
@@ -3212,7 +3331,13 @@ async function generateWithCohere(request: TextGenerationRequest): Promise<Gener
 
   const body: Record<string, unknown> = {
     model: request.settings.model,
-    messages: [{ role: "user", content: request.prompt }]
+    messages: [
+      {
+        role: "system",
+        content: buildProviderSystemPrompt("cohere", request.settings.model, request.task)
+      },
+      { role: "user", content: request.prompt }
+    ]
   };
   addSamplingOptions(body, request.settings, "max_tokens");
   if (request.settings.topPOverride !== null) {
@@ -3227,7 +3352,8 @@ async function generateWithCohere(request: TextGenerationRequest): Promise<Gener
       "Content-Type": "application/json"
     },
     body,
-    "Cohere"
+    "Cohere",
+    request.signal
   );
   const raw = extractTextFromCohereResponse(json);
 
@@ -3257,6 +3383,9 @@ async function generateWithGemini(request: TextGenerationRequest): Promise<Gener
   }
 
   const body: Record<string, unknown> = {
+    system_instruction: {
+      parts: [{ text: buildProviderSystemPrompt("gemini", request.settings.model, request.task) }]
+    },
     contents: [{ role: "user", parts: [{ text: request.prompt }] }]
   };
   if (Object.keys(generationConfig).length > 0) {
@@ -3273,7 +3402,8 @@ async function generateWithGemini(request: TextGenerationRequest): Promise<Gener
       "Content-Type": "application/json"
     },
     body,
-    "Google Gemini"
+    "Google Gemini",
+    request.signal
   );
   const raw = extractTextFromGeminiResponse(json);
 
@@ -3288,7 +3418,7 @@ async function generateWithGemini(request: TextGenerationRequest): Promise<Gener
 function addSamplingOptions(
   body: Record<string, unknown>,
   settings: GenerationSettings,
-  maxTokensKey: "max_tokens" | "maxOutputTokens"
+  maxTokensKey: "max_tokens" | "maxOutputTokens" | "max_completion_tokens"
 ): void {
   if (settings.temperatureOverride !== null) {
     body.temperature = settings.temperatureOverride;
@@ -3345,6 +3475,13 @@ function getApiKey(settings: GenerationSettings, provider: GenerationProvider): 
         legacySetting: settings.legacyApiKey,
         environmentValues: [process.env.MISTRAL_API_KEY ?? ""]
       });
+    case "zai":
+      return resolveApiKeyValue({
+        genericSecret: settings.apiKey,
+        providerSecret: settings.zAiApiKey,
+        legacySetting: settings.legacyApiKey,
+        environmentValues: [process.env.ZAI_API_KEY ?? "", process.env.ZHIPUAI_API_KEY ?? ""]
+      });
     case "openrouter":
       return resolveApiKeyValue({
         genericSecret: settings.apiKey,
@@ -3386,6 +3523,8 @@ function getMissingApiKeyMessage(provider: GenerationProvider): string {
       return "Set codexCommitWidget.geminiApiKey, GEMINI_API_KEY, or GOOGLE_API_KEY before using Google Gemini.";
     case "mistral":
       return "Set codexCommitWidget.mistralApiKey or MISTRAL_API_KEY before using Mistral.";
+    case "zai":
+      return "Save a Z.AI API key in AI Helper settings, or set ZAI_API_KEY or ZHIPUAI_API_KEY.";
     case "openrouter":
       return "Set codexCommitWidget.openRouterApiKey or OPENROUTER_API_KEY before using OpenRouter.";
     case "huggingface":
@@ -3402,16 +3541,21 @@ async function postJson(
   url: string,
   headers: Record<string, string>,
   body: Record<string, unknown>,
-  providerLabel: string
+  providerLabel: string,
+  signal: AbortSignal
 ): Promise<unknown> {
   let response: Response;
   try {
     response = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     });
   } catch (error: unknown) {
+    if (signal.aborted || isGenerationCancelled(error)) {
+      throw new GenerationCancelledError();
+    }
     const message = error instanceof Error ? error.message : "Unknown network error.";
     throw new Error(`${providerLabel} request failed before a response was received.\n\n${message}`);
   }
@@ -3724,6 +3868,7 @@ async function generateRawTextWithCodex(options: {
   outputLastMessageFile: string;
   trackTokenUsage: boolean;
   codexCliVersion: Semver | null;
+  signal: AbortSignal;
 }): Promise<GeneratedTextResult> {
   const {
     provider,
@@ -3734,7 +3879,8 @@ async function generateRawTextWithCodex(options: {
     cwd,
     outputLastMessageFile,
     trackTokenUsage,
-    codexCliVersion
+    codexCliVersion,
+    signal
   } = options;
 
   try {
@@ -3742,7 +3888,8 @@ async function generateRawTextWithCodex(options: {
       const extensionRaw = await tryGenerateViaExtensionCommand(
         codexExtensionCommand,
         prompt,
-        cwd
+        cwd,
+        signal
       );
 
       if (extensionRaw.trim() && !isLikelyPromptEcho(extensionRaw, prompt)) {
@@ -3755,7 +3902,9 @@ async function generateRawTextWithCodex(options: {
 
     await warnIfCodexCliOutdated(codexCommand, cwd, codexCliVersion);
 
-    const { stdout, stderr } = await runCodexCli(codexCommand, args, cwd, prompt);
+    throwIfGenerationCancelled(signal);
+    const { stdout, stderr } = await runCodexCli(codexCommand, args, cwd, prompt, signal);
+    throwIfGenerationCancelled(signal);
     const outputLastMessage = await readOutputLastMessage(outputLastMessageFile);
     const raw = (outputLastMessage || stdout || stderr || "").trim();
 
@@ -3775,22 +3924,38 @@ async function generateRawTextWithCodex(options: {
 async function tryGenerateViaExtensionCommand(
   commandId: string,
   prompt: string,
-  cwd: string
+  cwd: string,
+  signal: AbortSignal
 ): Promise<string> {
+  const cancellationSource = new vscode.CancellationTokenSource();
+  const cancel = () => cancellationSource.cancel();
+  signal.addEventListener("abort", cancel, { once: true });
   try {
     const result = await vscode.commands.executeCommand(commandId, {
       prompt,
       cwd,
-      source: "ai-commit-prompt-helper"
+      source: "codex-commit-widget",
+      cancellationToken: cancellationSource.token
     });
+    throwIfGenerationCancelled(signal);
     return extractTextFromUnknownResult(result);
-  } catch {
+  } catch (error: unknown) {
+    if (signal.aborted || isGenerationCancelled(error)) {
+      throw new GenerationCancelledError();
+    }
     try {
       const fallbackResult = await vscode.commands.executeCommand(commandId, prompt);
+      throwIfGenerationCancelled(signal);
       return extractTextFromUnknownResult(fallbackResult);
-    } catch {
+    } catch (fallbackError: unknown) {
+      if (signal.aborted || isGenerationCancelled(fallbackError)) {
+        throw new GenerationCancelledError();
+      }
       return "";
     }
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    cancellationSource.dispose();
   }
 }
 
@@ -3827,7 +3992,8 @@ async function warnIfCodexCliOutdated(
 
 async function getCodexCliVersion(
   codexCommand: string,
-  cwd: string
+  cwd: string,
+  signal?: AbortSignal
 ): Promise<Semver | null> {
   const candidates = getCodexCliCandidates(codexCommand);
 
@@ -3838,13 +4004,18 @@ async function getCodexCliVersion(
         cwd,
         maxBuffer: 1024 * 1024,
         env: process.env,
-        shell
+        shell,
+        timeout: 8000,
+        signal
       });
       const parsed = parseSemver(`${stdout ?? ""}\n${stderr ?? ""}`);
       if (parsed) {
         return parsed;
       }
     } catch (error: any) {
+      if (signal?.aborted) {
+        throw new GenerationCancelledError();
+      }
       if (error?.code === "ENOENT") {
         continue;
       }
@@ -3918,13 +4089,15 @@ async function runCodexCli(
   codexCommand: string,
   args: string[],
   cwd: string,
-  stdinText: string
+  stdinText: string,
+  signal: AbortSignal
 ) {
   const candidates = getCodexCliCandidates(codexCommand);
   let lastEnoentError: unknown;
   const authFailures: Array<{ candidate: string; details: string }> = [];
 
   for (const candidate of candidates) {
+    throwIfGenerationCancelled(signal);
     try {
       const shell = shouldUseShellForCliCandidate(candidate);
       return await execFileWithStdin(candidate, args, stdinText, {
@@ -3932,8 +4105,11 @@ async function runCodexCli(
         maxBuffer: 10 * 1024 * 1024,
         env: process.env,
         shell
-      });
+      }, signal);
     } catch (error: any) {
+      if (signal.aborted || isGenerationCancelled(error)) {
+        throw new GenerationCancelledError();
+      }
       const stdout = String(error?.stdout ?? "");
       const stderr = String(error?.stderr ?? "");
       const message = String(error?.message ?? "");
@@ -4095,10 +4271,16 @@ async function execFileWithStdin(
   file: string,
   args: string[],
   stdinText: string,
-  options: ExecFileOptions
+  options: ExecFileOptions,
+  signal: AbortSignal
 ): Promise<{ stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new GenerationCancelledError());
+      return;
+    }
     const child = execFile(file, args, options, (error, stdout, stderr) => {
+      cancellation.removeEventListener("abort", cancelChild);
       if (error) {
         const enhancedError = error as Error & { stdout?: string; stderr?: string };
         enhancedError.stdout = String(stdout ?? "");
@@ -4112,6 +4294,21 @@ async function execFileWithStdin(
         stderr: String(stderr ?? "")
       });
     });
+
+    const cancelChild = () => {
+      if (process.platform === "win32" && child.pid) {
+        execFile(
+          "taskkill",
+          ["/pid", String(child.pid), "/T", "/F"],
+          { windowsHide: true },
+          () => undefined
+        );
+      }
+      child.kill();
+      reject(new GenerationCancelledError());
+    };
+    const cancellation = signal;
+    cancellation.addEventListener("abort", cancelChild, { once: true });
 
     if (child.stdin) {
       child.stdin.end(stdinText);

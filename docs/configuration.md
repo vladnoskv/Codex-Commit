@@ -1,29 +1,14 @@
-# Configuration Guide
+# Configuration guide
 
-This document shows practical `settings.json` examples for **AI Commit & Prompt Helper**.
+Applies to extension release: `v2.2.0`.
 
-Applies to extension release: `v2.1.0`.
+Most people only need the setup panel. Select the **AI Helper** Activity Bar icon, choose a provider, complete the fields shown for it, and select **Save Settings**.
 
-## Visual Preview
+## Recommended setup
 
-Commit action in Source Control:
+### Codex CLI
 
-![Source Control commit button](../media/commit-button.png)
-
-Settings examples:
-
-![Settings example 1](../media/commit-settings-1.PNG)
-![Settings example 2](../media/commit-settings-2.PNG)
-
-## Baseline
-
-Select the **AI Helper** Activity Bar icon to open the settings panel. On first use it
-opens as a setup wizard; after setup is saved, the same icon opens normal settings. Use
-**Run Setup Wizard** in the panel to repeat provider setup later.
-
-The panel writes non-secret settings shown below, while hiding controls that are not used
-by the selected provider. API keys entered in the panel are stored in VS Code
-SecretStorage. Existing key values in `settings.json` still work as migration fallbacks.
+Choose **Codex CLI**, use **Auto-find Codex CLI**, and then select **Check Codex Status**. Leave the model on **Use provider default**. This avoids pinning a model that a future CLI release may no longer support.
 
 ```json
 {
@@ -34,208 +19,111 @@ SecretStorage. Existing key values in `settings.json` still work as migration fa
 }
 ```
 
-Leave `model` empty to use the built-in default for the selected provider. For non-custom
-HTTP providers, the settings panel only saves models from that provider's bundled or
-refreshed model list. Arbitrary custom model IDs are reserved for Codex CLI and custom
-OpenAI-compatible endpoints.
+### Direct API provider
 
-## Provider Examples
+Choose the provider and save its key in the setup panel. Keys entered there are stored in VS Code SecretStorage and do not appear in `settings.json`.
 
-OpenAI:
+| Provider | Default model | Why |
+| --- | --- | --- |
+| OpenAI | `gpt-5.4-mini` | Strong and efficient for bounded writing tasks |
+| DeepSeek | `deepseek-v4-flash` | Fast, lower-cost V4 option |
+| Anthropic Claude | `claude-sonnet-5` | Speed and capability balance |
+| Google Gemini | `gemini-3.5-flash` | Stable fast model |
+| Cohere | `command-a-plus-05-2026` | Current Command A generation model |
+| Mistral | `mistral-medium-latest` | Provider-maintained current alias |
+| Z.AI / GLM | `glm-4.7-flash` | Lightweight GLM model for short tasks |
 
-```json
-{
-  "codexCommitWidget.provider": "openai",
-  "codexCommitWidget.model": "gpt-5.5",
-  "codexCommitWidget.openAiApiKey": ""
-}
-```
+Select **Refresh Models** to replace fallback choices with models available to your account.
 
-DeepSeek:
+## Z.AI and GLM
 
-```json
-{
-  "codexCommitWidget.provider": "deepseek",
-  "codexCommitWidget.model": "deepseek-v4-flash",
-  "codexCommitWidget.deepSeekApiKey": ""
-}
-```
-
-Anthropic Claude:
+Choose **Z.AI (GLM)** in the provider list. Save a Z.AI key and select a model such as `glm-4.7-flash`, `glm-5-turbo`, or `glm-5.1`.
 
 ```json
 {
-  "codexCommitWidget.provider": "anthropic",
-  "codexCommitWidget.model": "claude-opus-4-1-20250805",
-  "codexCommitWidget.anthropicApiKey": ""
+  "codexCommitWidget.provider": "zai",
+  "codexCommitWidget.model": "glm-4.7-flash"
 }
 ```
 
-Google Gemini:
+You may use `ZAI_API_KEY` or `ZHIPUAI_API_KEY` instead of saving a key in VS Code.
 
-```json
-{
-  "codexCommitWidget.provider": "gemini",
-  "codexCommitWidget.model": "gemini-3.5-flash",
-  "codexCommitWidget.geminiApiKey": ""
-}
-```
+## Routers and local models
 
-Mistral, Cohere, OpenRouter, Hugging Face, and custom OpenAI-compatible endpoints:
+OpenRouter and Hugging Face expose several model families through one provider. Refresh the list, then choose the exact model available to your account. AI Helper recognizes common OpenAI, Claude, DeepSeek, Gemini, GLM, Cohere, and Mistral IDs and applies the matching concise system instruction.
 
-```json
-{
-  "codexCommitWidget.provider": "mistral",
-  "codexCommitWidget.model": "mistral-medium-latest",
-  "codexCommitWidget.mistralApiKey": ""
-}
-```
-
-```json
-{
-  "codexCommitWidget.provider": "cohere",
-  "codexCommitWidget.model": "command-a-plus-05-2026",
-  "codexCommitWidget.cohereApiKey": ""
-}
-```
-
-```json
-{
-  "codexCommitWidget.provider": "openrouter",
-  "codexCommitWidget.model": "openai/gpt-5.5",
-  "codexCommitWidget.openRouterApiKey": ""
-}
-```
-
-```json
-{
-  "codexCommitWidget.provider": "huggingface",
-  "codexCommitWidget.model": "openai/gpt-oss-120b",
-  "codexCommitWidget.huggingFaceApiKey": ""
-}
-```
+For Ollama gateways, LM Studio, self-hosted vLLM, or another compatible service, choose **Custom OpenAI-Compatible** and enter the service base URL and exact model ID:
 
 ```json
 {
   "codexCommitWidget.provider": "customOpenAiCompatible",
-  "codexCommitWidget.customOpenAiCompatibleBaseUrl": "https://api.example.com/v1",
-  "codexCommitWidget.model": "provider-model-id",
-  "codexCommitWidget.customOpenAiCompatibleApiKey": ""
+  "codexCommitWidget.customOpenAiCompatibleBaseUrl": "http://127.0.0.1:1234/v1",
+  "codexCommitWidget.model": "your-model-id"
 }
 ```
 
-Prefer the setup panel or environment variables for API keys. Environment fallbacks:
+The service must provide an OpenAI-style chat-completions endpoint. Model refresh also expects an OpenAI-style `/models` response.
 
-- `OPENAI_API_KEY`
-- `DEEPSEEK_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `COHERE_API_KEY`
-- `GEMINI_API_KEY` or `GOOGLE_API_KEY`
-- `MISTRAL_API_KEY`
-- `OPENROUTER_API_KEY`
-- `HF_TOKEN` or `HUGGINGFACE_API_KEY`
-- `OPENAI_COMPATIBLE_API_KEY`
+## Cancelling safely
 
-Model refresh and pricing:
+Commit, prompt, and release generation notifications include **Cancel**. On cancellation:
 
-- OpenAI-compatible providers use their `/models` endpoint when available.
-- Anthropic, Cohere, Gemini, Mistral, OpenRouter, Hugging Face, and custom compatible providers are queried through their provider-specific model APIs.
-- Pricing appears only when a provider returns token billing metadata. If pricing is not present, the model still appears without cost text.
-- DeepSeek is restricted to the supported API model names `deepseek-v4-flash` and `deepseek-v4-pro`.
+- active HTTP requests are aborted;
+- an active Codex child process is stopped;
+- late provider results are ignored;
+- no generated text is inserted into Source Control.
 
-Current provider presets:
+The message that was already in the Source Control box is left as-is.
 
-- OpenAI: `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`
-- DeepSeek: `deepseek-v4-flash`, `deepseek-v4-pro`
-- Anthropic: `claude-opus-4-1-20250805`, `claude-sonnet-4-20250514`
-- Cohere: `command-a-plus-05-2026`, `command-a-03-2025`, `command-a-reasoning-08-2025`
-- Gemini: `gemini-3.5-flash`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`
-- Mistral: `mistral-medium-latest`, `mistral-large-latest`, `mistral-small-latest`, `ministral-14b-latest`
-- OpenRouter: `openai/gpt-5.5`, `google/gemini-3.5-flash`, `deepseek/deepseek-v4-flash`, `qwen/qwen3.7-max`
-- Hugging Face: `openai/gpt-oss-120b`, `Qwen/Qwen3-Coder-480B-A35B-Instruct`, `deepseek-ai/DeepSeek-R1`
+## Change the commit format
 
-## CLI Setup
-
-If Codex CLI is installed globally but not detected in VS Code:
-
-1. Select the **AI Helper** Activity Bar icon.
-2. Use **Run Setup Wizard**.
-3. Use **Auto-find Codex CLI** or manually enter `codexCommitWidget.codexCommand`.
-4. Use **Check Codex Status** to confirm the detected CLI, version, login state, and account label.
-5. Save settings.
-
-Codex CLI generation is version-aware. If the selected Codex model requires a newer CLI than the detected install, the extension uses a compatible fallback model for that run and shows the update command needed to use the newer model.
-
-## Prompt Customization
+Edit the prompt in the setup panel, or configure it directly:
 
 ```json
 {
-  "codexCommitWidget.promptTemplate": "You are generating a git commit message from staged changes. Return only the commit message. Use conventional commits and include a short risk audit.",
-  "codexCommitWidget.additionalPromptInstructions": "Prefer imperative verbs in subject lines. Mention migrations explicitly if present. Keep sections concise."
+  "codexCommitWidget.additionalPromptInstructions": "Use imperative subjects. Mention migrations when present. Keep every section concise."
 }
 ```
 
-## Improve Prompt
+The built-in prompt asks for a Conventional Commit subject, change summary, file-to-intent mapping, and audit notes. Provider-specific system instructions are added automatically.
 
-Run `AI Helper: Improve Prompt` from the Command Palette to rewrite selected editor text
-into a clearer coding-agent prompt. If no text is selected, the extension asks for prompt
-text first. It uses the same configured provider, model, API key, reasoning effort, and
-sampling overrides, then opens a review document before you copy, open, or replace the
-result.
+## Limits and cost controls
 
-## Release Assistant
+- **Max diff characters** limits staged context before it is sent.
+- **Max output tokens** limits response length when supported.
+- **Temperature** and **Top P** are optional; leave them empty for provider defaults.
+- **Reasoning effort** is sent to Codex CLI and compatible OpenAI models.
+- **Track token usage** stores a local rolling summary. Missing API usage is marked as estimated.
 
-Run `AI Helper: Generate Release Assistant` from the Command Palette to generate
-reviewable release workflow copy from Git history. The command uses the latest Git tag as
-the default base, asks for the target version, suggests a semver bump from Conventional
-Commit signals, then opens Markdown containing:
+For predictable commit messages, provider defaults and low reasoning effort are usually sufficient.
 
-- changelog
-- GitHub release notes
-- npm release summary
-- PR description
-- reviewer checklist
+## Environment variables
 
-The release assistant uses the same configured provider, model, API key, reasoning
-effort, sampling overrides, and token analytics settings as commit generation. It does
-not create tags, publish packages, create GitHub releases, or modify repository files.
-
-## Sampling Overrides
-
-Use these only when you want explicit control over style variability and response size.
-
-```json
-{
-  "codexCommitWidget.temperatureOverride": 0.2,
-  "codexCommitWidget.topPOverride": 0.95,
-  "codexCommitWidget.maxOutputTokensOverride": 500
-}
+```text
+OPENAI_API_KEY
+DEEPSEEK_API_KEY
+ANTHROPIC_API_KEY
+COHERE_API_KEY
+GEMINI_API_KEY or GOOGLE_API_KEY
+MISTRAL_API_KEY
+ZAI_API_KEY or ZHIPUAI_API_KEY
+OPENROUTER_API_KEY
+HF_TOKEN or HUGGINGFACE_API_KEY
+OPENAI_COMPATIBLE_API_KEY
 ```
 
-Set each value to `null` to let provider defaults apply.
-
-## Token Usage Analytics
+## Advanced settings
 
 ```json
 {
+  "codexCommitWidget.maxDiffChars": 120000,
+  "codexCommitWidget.reasoningEffort": "low",
+  "codexCommitWidget.temperatureOverride": null,
+  "codexCommitWidget.topPOverride": null,
+  "codexCommitWidget.maxOutputTokensOverride": null,
   "codexCommitWidget.trackTokenUsageAnalytics": true,
   "codexCommitWidget.analyticsRetentionDays": 7
 }
 ```
 
-The settings panel shows the current token usage summary, generation count, estimated-run count, and last updated timestamp. `codexCommitWidget.maxDiffChars` controls staged-diff truncation before sending context, while `codexCommitWidget.maxOutputTokensOverride` can be left empty to use the provider default.
-
-The extension auto-populates these settings from tracked runs:
-
-- `codexCommitWidget.analyticsSummary`
-- `codexCommitWidget.analyticsTotalTokens`
-- `codexCommitWidget.analyticsInputTokens`
-- `codexCommitWidget.analyticsOutputTokens`
-- `codexCommitWidget.analyticsGenerations`
-- `codexCommitWidget.analyticsEstimatedRuns`
-- `codexCommitWidget.analyticsLastUpdated`
-
-## Migration From v1
-
-New settings use `codexCommitWidget.*`. Existing `aiCommitPromptHelper.*` values are read
-as fallbacks, but update your settings to the public extension namespace when practical.
+Older `aiCommitPromptHelper.*` settings are still read as migration fallbacks. New configuration should use `codexCommitWidget.*`.

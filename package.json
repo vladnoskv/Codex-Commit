@@ -1,8 +1,8 @@
 {
   "name": "codex-commit-widget",
   "displayName": "AI Commit & Prompt Helper",
-  "description": "Generate structured AI commit messages in VS Code with Codex CLI, OpenRouter, Hugging Face, and OpenAI-compatible LLM APIs.",
-  "version": "2.1.0",
+  "description": "Generate review-friendly commit messages with Codex, Claude, DeepSeek, Gemini, GLM, OpenRouter, and compatible AI providers.",
+  "version": "2.2.0",
   "license": "MIT",
   "publisher": "VladNoskov",
   "icon": "media/logo.png",
@@ -29,7 +29,10 @@
     "deepseek",
     "gemini",
     "mistral",
-    "cohere"
+    "cohere",
+    "glm",
+    "z.ai",
+    "zhipu"
   ],
   "repository": {
     "type": "git",
@@ -115,6 +118,7 @@
             "cohere",
             "gemini",
             "mistral",
+            "zai",
             "openrouter",
             "huggingface",
             "customOpenAiCompatible"
@@ -233,6 +237,11 @@
           "type": "string",
           "default": "",
           "description": "Mistral API key. Falls back to MISTRAL_API_KEY."
+        },
+        "codexCommitWidget.zAiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Legacy Z.AI API key setting. Prefer the setup panel, which stores keys in VS Code SecretStorage. Falls back to ZAI_API_KEY or ZHIPUAI_API_KEY."
         },
         "codexCommitWidget.openRouterApiKey": {
           "type": "string",

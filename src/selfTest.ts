@@ -16,6 +16,7 @@ import {
   parseReleaseCommitsFromGitLog,
   suggestSemverBumpFromCommits
 } from "./releaseAssistant";
+import { buildProviderSystemPrompt, inferModelFamily } from "./providerPrompts";
 
 function readJsonFile<T>(relativePath: string): T {
   return JSON.parse(readFileSync(join(__dirname, "..", relativePath), "utf8")) as T;
@@ -112,6 +113,26 @@ function testPackageContributionIdsUseExtensionNamespace(): void {
     ),
     "sidebar action visibility is no longer configurable because the Activity Bar icon opens settings"
   );
+
+  const providerSetting = packageManifest.contributes.configuration.properties[
+    "codexCommitWidget.provider"
+  ] as { enum?: string[] };
+  assert.deepEqual(
+    providerSetting.enum,
+    Object.keys(PROVIDER_MODE_DEFINITIONS),
+    "native VS Code provider choices must match the webview/provider registry"
+  );
+  for (const mode of Object.values(PROVIDER_MODE_DEFINITIONS)) {
+    if (mode.apiKeySetting) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(
+          packageManifest.contributes.configuration.properties,
+          `codexCommitWidget.${mode.apiKeySetting}`
+        ),
+        `${mode.provider} API key fallback must be registered in native VS Code settings`
+      );
+    }
+  }
 }
 
 function testSidebarActionOnlyOpensSettings(): void {
@@ -130,8 +151,8 @@ function testSidebarActionOnlyOpensSettings(): void {
     "settings panel should expose a setup wizard rerun action"
   );
   assert.ok(
-    extensionSource.includes("const allowCustom = mode.provider === \"customOpenAiCompatible\""),
-    "custom model input must be scoped to custom-compatible provider modes"
+    extensionSource.includes("const allowCustom = true"),
+    "every provider should accept newly released model IDs before the bundled catalog is updated"
   );
   assert.ok(
     !extensionSource.includes('new vscode.TreeItem("Generate Commit Message"'),
@@ -193,6 +214,21 @@ function testSidebarActionOnlyOpensSettings(): void {
       extensionSource.includes("generateReleaseAssistant"),
     "extension should register the release assistant command"
   );
+  assert.ok(
+    extensionSource.includes("scheduleSettingsPanelRefresh(context)"),
+    "native VS Code setting changes should refresh an open settings webview"
+  );
+  assert.ok(
+    extensionSource.includes('provider !== "customOpenAiCompatible"') &&
+      extensionSource.includes("if (apiKey)"),
+    "custom/local OpenAI-compatible endpoints should support optional authentication"
+  );
+  assert.ok(
+    extensionSource.includes("cancellable: true") &&
+      extensionSource.includes("throwIfGenerationCancelled(signal)") &&
+      extensionSource.includes("child.kill()"),
+    "generation cancellation should stop requests/processes and guard post-generation writes"
+  );
   const localProfile = process.env.USERPROFILE || "";
   if (localProfile) {
     assert.ok(
@@ -208,22 +244,23 @@ function testDocsMatchCurrentRelease(): void {
   const configuration = readFileSync(join(__dirname, "..", "docs", "configuration.md"), "utf8");
 
   assert.ok(
-    readme.startsWith("# AI Commit & Prompt Helper v2.1.0"),
+    readme.startsWith("# AI Commit & Prompt Helper v2.2.0"),
     "README title should describe the current release"
   );
   assert.ok(
-    readme.includes("Current extension release: `v2.1.0`."),
+    readme.includes("Current extension release: `v2.2.0`."),
     "README current release line should match the package version"
   );
   assert.ok(
-    configuration.includes("Applies to extension release: `v2.1.0`."),
+    configuration.includes("Applies to extension release: `v2.2.0`."),
     "configuration docs should describe the current release"
   );
 }
 
 function testProviderModelDefaultsStayWithinProvider(): void {
-  assert.equal(PROVIDER_MODE_DEFINITIONS.codexCli.defaultModel, "gpt-5.5");
-  assert.equal(PROVIDER_MODE_DEFINITIONS.codexExtensionThenCli.defaultModel, "gpt-5.5");
+  assert.equal(PROVIDER_MODE_DEFINITIONS.codexCli.defaultModel, "");
+  assert.equal(PROVIDER_MODE_DEFINITIONS.codexExtensionThenCli.defaultModel, "");
+  assert.ok(PROVIDER_MODE_DEFINITIONS.codexCli.modelOptions.includes("gpt-5.3-codex"));
   assert.ok(
     isCodexCliModelBlockedByVersion("gpt-5.5", "0.120.0"),
     "Codex CLI 0.120.0 should not receive gpt-5.5"
@@ -248,7 +285,7 @@ function testProviderModelDefaultsStayWithinProvider(): void {
     "gpt-5.4",
     "custom Codex CLI model IDs should still be preserved"
   );
-  assert.equal(PROVIDER_MODE_DEFINITIONS.openai.defaultModel, "gpt-5.5");
+  assert.equal(PROVIDER_MODE_DEFINITIONS.openai.defaultModel, "gpt-5.4-mini");
   assert.ok(PROVIDER_MODE_DEFINITIONS.openai.modelOptions.includes("gpt-5.4-mini"));
 
   assert.equal(PROVIDER_MODE_DEFINITIONS.deepseek.defaultModel, "deepseek-v4-flash");
@@ -258,13 +295,13 @@ function testProviderModelDefaultsStayWithinProvider(): void {
   ]);
   assert.equal(
     resolveConfiguredModelForProvider("deepseek", "gpt-5.4-mini"),
-    "deepseek-v4-flash"
+    "gpt-5.4-mini"
   );
   assert.equal(
     resolveConfiguredModelForProvider("deepseek", "deepseek-v4-pro"),
     "deepseek-v4-pro"
   );
-  assert.equal(PROVIDER_MODE_DEFINITIONS.anthropic.defaultModel, "claude-opus-4-1-20250805");
+  assert.equal(PROVIDER_MODE_DEFINITIONS.anthropic.defaultModel, "claude-sonnet-5");
   assert.ok(PROVIDER_MODE_DEFINITIONS.anthropic.modelOptions.includes("claude-sonnet-4-20250514"));
   assert.equal(PROVIDER_MODE_DEFINITIONS.cohere.defaultModel, "command-a-plus-05-2026");
   assert.ok(PROVIDER_MODE_DEFINITIONS.cohere.modelOptions.includes("command-a-reasoning-08-2025"));
@@ -277,6 +314,8 @@ function testProviderModelDefaultsStayWithinProvider(): void {
     "",
     "custom OpenAI-compatible providers should not inherit a hard-coded model"
   );
+  assert.equal(PROVIDER_MODE_DEFINITIONS.zai.defaultModel, "glm-4.7-flash");
+  assert.ok(PROVIDER_MODE_DEFINITIONS.zai.modelOptions.includes("glm-5.1"));
 }
 
 function testHuggingFaceProviderMetadata(): void {
@@ -293,11 +332,27 @@ function testHuggingFaceProviderMetadata(): void {
 function testOpenRouterLowCostPresets(): void {
   const definition = PROVIDER_MODE_DEFINITIONS.openrouter;
 
-  assert.equal(definition.defaultModel, "openai/gpt-5.5");
+  assert.equal(definition.defaultModel, "openai/gpt-5.4-mini");
   assert.ok(definition.modelOptions.includes("google/gemini-3.5-flash"));
   assert.ok(definition.modelOptions.includes("anthropic/claude-opus-4.8"));
   assert.ok(definition.modelOptions.includes("mistralai/mistral-medium-3-5"));
   assert.equal(definition.secretKey, "aiCommitPromptHelper.secret.openrouter");
+}
+
+function testProviderPromptsAdaptToRoutedModelFamilies(): void {
+  assert.equal(inferModelFamily("openrouter", "anthropic/claude-opus-4.8"), "claude");
+  assert.equal(inferModelFamily("huggingface", "zai-org/GLM-4.5"), "glm");
+  assert.equal(inferModelFamily("zai", "glm-5.1"), "glm");
+  assert.ok(
+    buildProviderSystemPrompt("deepseek", "deepseek-v4-flash", "commit").includes(
+      "without reasoning traces"
+    )
+  );
+  assert.ok(
+    buildProviderSystemPrompt("cohere", "command-a-plus-05-2026", "commit").includes(
+      "conversational filler"
+    )
+  );
 }
 
 function testApiKeyResolutionPrefersSecretsBeforeLegacyAndEnvironment(): void {
@@ -392,5 +447,6 @@ testProviderModelDefaultsStayWithinProvider();
 testHuggingFaceProviderMetadata();
 testOpenRouterLowCostPresets();
 testApiKeyResolutionPrefersSecretsBeforeLegacyAndEnvironment();
+testProviderPromptsAdaptToRoutedModelFamilies();
 testReleaseAssistantParsesGitHistoryAndSuggestsSemver();
 testReleaseAssistantPromptRequiresMvpSections();

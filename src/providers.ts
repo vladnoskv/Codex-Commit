@@ -7,6 +7,7 @@ export type GenerationProvider =
   | "cohere"
   | "gemini"
   | "mistral"
+  | "zai"
   | "openrouter"
   | "huggingface"
   | "customOpenAiCompatible";
@@ -30,7 +31,6 @@ export type ProviderModeDefinition = {
   requiresCustomBaseUrl: boolean;
 };
 
-const DEFAULT_MODEL = "gpt-5.5";
 const SECRET_PREFIX = "aiCommitPromptHelper.secret";
 const CODEX_CLI_MODEL_COMPATIBILITY: Record<
   string,
@@ -45,8 +45,8 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
   codexCli: {
     provider: "codexCli",
     label: "Codex CLI",
-    defaultModel: DEFAULT_MODEL,
-    modelOptions: [DEFAULT_MODEL],
+    defaultModel: "",
+    modelOptions: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.3-codex"],
     apiKeySetting: null,
     apiKeyLabel: null,
     apiKeyEnvironment: null,
@@ -61,8 +61,8 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
   codexExtensionThenCli: {
     provider: "codexExtensionThenCli",
     label: "Codex Extension, Then CLI",
-    defaultModel: DEFAULT_MODEL,
-    modelOptions: [DEFAULT_MODEL],
+    defaultModel: "",
+    modelOptions: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.3-codex"],
     apiKeySetting: null,
     apiKeyLabel: null,
     apiKeyEnvironment: null,
@@ -77,14 +77,14 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
   openai: {
     provider: "openai",
     label: "OpenAI",
-    defaultModel: "gpt-5.5",
+    defaultModel: "gpt-5.4-mini",
     modelOptions: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"],
     apiKeySetting: "openAiApiKey",
     apiKeyLabel: "OpenAI API key",
     apiKeyEnvironment: "OPENAI_API_KEY",
     secretKey: `${SECRET_PREFIX}.openai`,
     defaultBaseUrl: "https://api.openai.com/v1",
-    supportsReasoningEffort: false,
+    supportsReasoningEffort: true,
     supportsSamplingOverrides: true,
     requiresCodexCommand: false,
     requiresCodexExtensionCommand: false,
@@ -109,8 +109,11 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
   anthropic: {
     provider: "anthropic",
     label: "Anthropic Claude",
-    defaultModel: "claude-opus-4-1-20250805",
+    defaultModel: "claude-sonnet-5",
     modelOptions: [
+      "claude-sonnet-5",
+      "claude-opus-4-8",
+      "claude-haiku-4-5",
       "claude-opus-4-1-20250805",
       "claude-opus-4-20250514",
       "claude-sonnet-4-20250514",
@@ -210,10 +213,37 @@ export const PROVIDER_MODE_DEFINITIONS: Record<GenerationProvider, ProviderModeD
     requiresCodexExtensionCommand: false,
     requiresCustomBaseUrl: false
   },
+  zai: {
+    provider: "zai",
+    label: "Z.AI (GLM)",
+    defaultModel: "glm-4.7-flash",
+    modelOptions: [
+      "glm-5.1",
+      "glm-5-turbo",
+      "glm-5",
+      "glm-4.7",
+      "glm-4.7-flash",
+      "glm-4.7-flashx",
+      "glm-4.6",
+      "glm-4.5",
+      "glm-4.5-air",
+      "glm-4.5-flash"
+    ],
+    apiKeySetting: "zAiApiKey",
+    apiKeyLabel: "Z.AI API key",
+    apiKeyEnvironment: "ZAI_API_KEY or ZHIPUAI_API_KEY",
+    secretKey: `${SECRET_PREFIX}.zai`,
+    defaultBaseUrl: "https://api.z.ai/api/paas/v4",
+    supportsReasoningEffort: false,
+    supportsSamplingOverrides: true,
+    requiresCodexCommand: false,
+    requiresCodexExtensionCommand: false,
+    requiresCustomBaseUrl: false
+  },
   openrouter: {
     provider: "openrouter",
     label: "OpenRouter",
-    defaultModel: "openai/gpt-5.5",
+    defaultModel: "openai/gpt-5.4-mini",
     modelOptions: [
       "openai/gpt-5.5",
       "openai/gpt-5.4",
@@ -299,6 +329,7 @@ export function normalizeGenerationProvider(value: string): GenerationProvider {
     case "cohere":
     case "gemini":
     case "mistral":
+    case "zai":
     case "openrouter":
     case "huggingface":
     case "customOpenAiCompatible":
@@ -322,11 +353,9 @@ export function resolveConfiguredModelForProvider(
     return definition.defaultModel;
   }
 
-  if (provider === "customOpenAiCompatible" || provider === "codexCli" || provider === "codexExtensionThenCli") {
-    return trimmed;
-  }
-
-  return definition.modelOptions.includes(trimmed) ? trimmed : definition.defaultModel;
+  // Provider model catalogs change faster than extension releases. Preserve an
+  // explicit ID and let the provider validate account access at request time.
+  return trimmed;
 }
 
 export function isCodexCliModelBlockedByVersion(model: string, cliVersion: string): boolean {
